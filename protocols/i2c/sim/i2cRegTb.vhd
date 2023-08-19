@@ -71,7 +71,7 @@ begin
       PRESCALE_G           => 62)       -- 400 kHz clk
     port map (
       clk    => masterClk,
-      rst    => masterRst,
+      srst   => masterRst,
       regIn  => regIn,
       regOut => regOut,
       i2ci   => i2ci,
@@ -155,9 +155,11 @@ begin
   sim : process is
     variable i2cAddr   : slv(6 downto 0);
     variable tenbit    : boolean;
-    variable regAddr   : slv(15 downto 0);
-    variable regRdData : Slv8Array(0 to 3);
-    variable regWrData : Slv8Array(0 to 3);
+    variable regAddr   : slv(7 downto 0);
+    -- variable regRdData : Slv8Array(0 to 3);
+    variable regRdData : slv(7 downto 0);
+    -- variable regWrData : Slv8Array(0 to 3);
+    variable regWrData : slv(7 downto 0);
   begin
     wait until masterRst = '1';
     wait until masterRst = '0';
@@ -179,11 +181,63 @@ begin
 --      readI2cReg(masterClk, regIn, regOut, i2cAddr, regAddr, regRdData, '1', true);
 --    end loop;
 
-    regAddr := (others => '0');
-    regWrData := (0 => X"11", 1 => X"22", 2 => X"33", 3 => X"44");
-    writeI2cBurst8(masterClk, regIn, regOut, i2cAddr, regAddr, regWrData, '0', true);
+    regAddr   := "00000010";
+    -- regWrData := (0 => X"11", 1 => X"22", 2 => X"33", 3 => X"44");
+    regWrData := "00110100";
 
-    readI2cBurst8(masterClk, regIn, regOut, i2cAddr, regAddr, regRdData, '0', true);
+    -- Write command + data
+    writeI2cPca9535(masterClk, regIn, regOut, i2cAddr, regAddr, regWrData, '0', true);
+    wait for 20 us;
+    wait until rising_edge(masterClk);
+    -- Read command
+    readI2cPca9535(masterClk, regIn, regOut, i2cAddr, regAddr, regRdData, '0', true);
+    -- regIn.i2cAddr                    <= "000" & i2cAddr;
+    -- regIn.tenbit                     <= '0';
+    -- regIn.regAddr                    <= (others => '0');
+    -- regIn.regAddr(regAddr'range)     <= regAddr;
+    -- regIn.regAddrSize                <= "00";
+    -- regIn.regDataSize                <= "00";
+    -- regIn.endianness                 <= '0';
+    -- regIn.regOp                      <= '1';
+    -- regIn.busReq                     <= '0';
+    -- regIn.repeatStart                <= '1';
+    -- regIn.regAddrSkip                <= '0';
+    -- regIn.regDataSkip                <= '1';
+    -- regIn.regWrData                  <= (others => '0');
+    -- regIn.regWrData(regWrData'range) <= regWrData;
+    -- regIn.regReq                     <= '1';
+    -- wait until regOut.regAck = '1';
+    -- wait until masterClk = '1';
+    -- regIn.regReq                     <= '0';
+    -- wait until regOut.regAck = '0';
+    -- wait until masterClk = '1';
+    -- regIn.regReq                     <= '0';
+    -- regIn.i2cAddr                    <= "000" & i2cAddr;
+    -- regIn.tenbit                     <= '0';
+    -- regIn.regAddr                    <= (others => '0');
+    -- regIn.regAddrSize                <= "00";
+    -- regIn.regDataSize                <= "00";
+    -- regIn.endianness                 <= '0';
+    -- regIn.regOp                      <= '0';
+    -- regIn.busReq                     <= '0';
+    -- regIn.repeatStart                <= '0';
+    -- regIn.regAddrSkip                <= '1';
+    -- regIn.regWrData                  <= (others => '0');
+    -- regIn.regWrData(regWrData'range) <= regWrData;
+    -- regIn.regReq                     <= '1';
+    -- wait until regOut.regAck = '1';
+    -- wait until masterClk = '1';
+    -- regIn.regReq                     <= '0';
+
+    -- regRdData := regOut.regRdData(regRdData'range);
+    -- wait until regOut.regAck = '0';
+    -- wait until masterClk = '1';
+
+
+    wait;
+
+    -- readI2cBurst8(masterClk, regIn, regOut, i2cAddr, regAddr, regRdData, '0', true);
+    -- readI2cBurst8(masterClk, regIn, regOut, i2cAddr, regAddr, regRdData, '0', true);
 
 
   end process;

@@ -84,6 +84,7 @@ package I2cPkg is
       regWrData   : slv(31 downto 0);
       regOp       : sl;
       regAddrSkip : sl;
+      regDataSkip : sl;
       regAddrSize : slv(1 downto 0);
       regDataSize : slv(1 downto 0);
       regReq      : sl;
@@ -99,6 +100,7 @@ package I2cPkg is
       regWrData   => (others => '0'),
       regOp       => '0',               -- 1 for write, 0 for read
       regAddrSkip => '0',
+      regDataSkip => '0',
       regAddrSize => (others => '0'),
       regDataSize => (others => '0'),
       regReq      => '0',
