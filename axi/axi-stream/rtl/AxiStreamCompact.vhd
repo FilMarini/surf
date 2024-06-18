@@ -104,7 +104,7 @@ begin  -- architecture rtl
         v.obMaster.tKeep := (others => '0');
       end if;
 
-      if ibm.tValid = '1' then
+      if ibM.tValid = '1' then
         for i in 0 to MST_BYTES_C - 1 loop
           if ibM.tKeep(i) = '1' and bytePos <= MST_BYTES_C - 1 then
             v.obMaster.tData((bytePos*8)+7 downto (bytePos*8)) := ibM.tData((i*8)+7 downto (i*8));
@@ -140,7 +140,7 @@ begin  -- architecture rtl
 
     rin <= v;
 
-  end process;
+  end process comb;
 
   seq : process (axisClk, axisRst) is
   begin
