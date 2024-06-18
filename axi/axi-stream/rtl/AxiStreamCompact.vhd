@@ -46,17 +46,21 @@ architecture rtl of AxiStreamCompact is
   constant MST_BYTES_C : positive := MASTER_AXI_CONFIG_G.TDATA_BYTES_C;
 
   type RegType is record
-    count       : slv(bitSize(MST_BYTES_C)-1 downto 0);
-    obMaster    : AxiStreamMasterType;
-    obMasterBkp : AxiStreamMasterType;
-    ibSlave     : AxiStreamSlaveType;
+    count            : slv(bitSize(MST_BYTES_C)-1 downto 0);
+    obMaster         : AxiStreamMasterType;
+    obMasterBkp      : AxiStreamMasterType;
+    ibSlave          : AxiStreamSlaveType;
+    forceValidOnNext : boolean;
+    tUserSet         : boolean;
   end record RegType;
 
   constant REG_INIT_C : RegType := (
-    count       => (others => '0'),
-    obMaster    => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
-    obMasterBkp => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
-    ibSlave     => AXI_STREAM_SLAVE_INIT_C
+    count            => (others => '0'),
+    obMaster         => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
+    obMasterBkp      => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
+    ibSlave          => AXI_STREAM_SLAVE_INIT_C,
+    forceValidOnNext => false,
+    tUserSet         => false
     );
 
   signal r   : RegType := REG_INIT_C;
@@ -77,10 +81,11 @@ begin  -- architecture rtl
     variable byteCnt : integer;  -- Number of valid bytes in incoming bus
     variable bytePos : integer;         -- byte positioning on slave stream
   begin  -- process
-    v       := r;
-    bytePos := conv_integer(r.count);
+    v                  := r;
+    v.forceValidOnNext := false;
+    bytePos            := conv_integer(r.count);
     -- Count num. of bytes
-    byteCnt := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
+    byteCnt            := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
 
     -- Init ready
     v.ibSlave.tReady := '0';
@@ -92,8 +97,10 @@ begin  -- architecture rtl
 
     if v.obMaster.tValid = '0' then
       -- Get Inbound data
-      ibM              := sAxisMaster;
-      v.ibSlave.tReady := '1';
+      ibM := sAxisMaster;
+      if not r.forceValidOnNext then
+        v.ibSlave.tReady := '1';
+      end if;
 
       -- Get Backup stream
       v.obMaster := v.obMasterBkp;
@@ -104,33 +111,59 @@ begin  -- architecture rtl
         v.obMaster.tKeep := (others => '0');
       end if;
 
-      if ibM.tValid = '1' then
-        for i in 0 to MST_BYTES_C - 1 loop
+      if ibM.tValid = '1' and not r.forceValidOnNext then
+        v.obMasterBkp       := AXI_STREAM_MASTER_INIT_C;
+        v.obMasterBkp.tKeep := (others => '0');
+        v.obMasterBkp.tStrb := (others => '0');
+        for i in 0 to SLV_BYTES_C - 1 loop
           if ibM.tKeep(i) = '1' and bytePos <= MST_BYTES_C - 1 then
             v.obMaster.tData((bytePos*8)+7 downto (bytePos*8)) := ibM.tData((i*8)+7 downto (i*8));
             v.obMaster.tKeep(bytePos)                          := '1';
-            v.obMaster.tUser                                   := ibM.tUser;
-            v.obMaster.tStrb                                   := ibM.tStrb;
-            bytePos                                            := bytePos + 1;
+            if not r.tUserSet then
+              v.obMaster.tUser := ibM.tUser;
+              v.tUserSet       := true;
+            end if;
+            v.obMaster.tStrb := ibM.tStrb;
           elsif ibM.tKeep(i) = '1' and bytePos > MST_BYTES_C - 1 then
             v.obMasterBkp.tData(((bytePos - MST_BYTES_C)*8)+7 downto ((bytePos - MST_BYTES_C)*8)) := ibM.tData((i*8)+7 downto (i*8));
             v.obMasterBkp.tKeep(bytePos - MST_BYTES_C)                                            := '1';
-            bytePos                                                                               := bytePos + 1;
+          end if;
+          if ibM.tKeep(i) = '1' then
+            bytePos := bytePos + 1;
           end if;
         end loop;  -- i
 
         v.obMaster.tId   := ibM.tId;
         v.obMaster.tDest := ibM.tDest;
-        v.obMaster.tLast := ibM.tLast;
 
-        -- Determine if we moved to backup
+        -- Axi stream slave is filled and ready to go out
         if bytePos >= MST_BYTES_C - 1 then
           v.count           := conv_std_logic_vector(bytePos - MST_BYTES_C, v.count'length);
           v.obMaster.tValid := '1';
+          v.tUserSet        := false;
+          if ibM.tLast = '1' then
+            if bytePos = MST_BYTES_C then
+              v.obMaster.tLast := '1';
+            else
+              v.forceValidOnNext := true;
+            end if;
+          end if;
+        -- Axi stream not yet filled
         else
           v.count       := conv_std_logic_vector(bytePos, v.count'length);
           v.obMasterBkp := v.obMaster;
+          if ibM.tLast = '1' then
+            v.obMaster.tValid := '1';
+            v.obMaster.tLast  := '1';
+            v.count           := (others => '0');
+          end if;
         end if;
+
+      -- Flush backup stream with tLast flag
+      elsif r.forceValidOnNext then
+        v.obMaster.tValid := '1';
+        v.obMaster.tLast  := '1';
+        v.count           := (others => '0');
       end if;
 
     end if;
