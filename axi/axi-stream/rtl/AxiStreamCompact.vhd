@@ -68,8 +68,8 @@ architecture rtl of AxiStreamCompact is
 begin  -- architecture rtl
 
   -- Make sure data widths are the same
-  -- assert (SLV_BYTES_C = MST_BYTES_C)
-  --   report "Data widths must be equal between master and slave" severity failure;
+  assert (MST_BYTES_C >= SLV_BYTES_C)
+    report "Master data widths must be greater or equal than slave" severity failure;
 
   comb : process (pipeAxisSlave, r, sAxisMaster) is
     variable v       : RegType;
