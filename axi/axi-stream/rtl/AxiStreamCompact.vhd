@@ -81,16 +81,15 @@ begin  -- architecture rtl
     variable byteCnt : integer;  -- Number of valid bytes in incoming bus
     variable bytePos : integer;         -- byte positioning on slave stream
   begin  -- process
-    v                  := r;
-    bytePos            := conv_integer(r.count);
+    v       := r;
+    bytePos := conv_integer(r.count);
     -- Count num. of bytes
-    byteCnt            := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
+    byteCnt := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
 
     -- Init ready
     v.ibSlave.tReady := '0';
 
     -- Choose ready source and clear valid
-    -- Quando il dato in uscita e' valido?
     if (pipeAxisSlave.tReady = '1') then
       v.obMaster.tValid := '0';
 
@@ -101,13 +100,11 @@ begin  -- architecture rtl
       v.forceValidOnNext := false;
     end if;
 
-    -- Quando il dato in ingresso viene preso?
-    if v.obMaster.tValid = '0' then
+    -- Accept input data
+    if v.obMaster.tValid = '0' and not r.forceValidOnNext then
       -- Get Inbound data
-      ibM := sAxisMaster;
-      if not r.forceValidOnNext then
-        v.ibSlave.tReady := '1';
-      end if;
+      ibM              := sAxisMaster;
+      v.ibSlave.tReady := '1';
 
       -- init when count = 0
       if (r.count = 0) then
@@ -115,7 +112,7 @@ begin  -- architecture rtl
         v.obMaster.tKeep := (others => '0');
       end if;
 
-      if ibM.tValid = '1' and not r.forceValidOnNext then
+      if ibM.tValid = '1' then
         v.obMasterBkp       := AXI_STREAM_MASTER_INIT_C;
         v.obMasterBkp.tKeep := (others => '0');
         v.obMasterBkp.tStrb := (others => '0');
@@ -162,15 +159,15 @@ begin  -- architecture rtl
             v.count           := (others => '0');
           end if;
         end if;
-
-      -- Flush backup stream with tLast flag
-      elsif r.forceValidOnNext then
-        v.obMaster.tValid := '1';
-        v.obMaster.tLast  := '1';
-        v.count           := (others => '0');
       end if;
 
+    -- Flush backup stream with tLast flag
+    elsif r.forceValidOnNext then
+      v.obMaster.tValid := '1';
+      v.obMaster.tLast  := '1';
+      v.count           := (others => '0');
     end if;
+
 
     sAxisSlave     <= v.ibSlave;
     pipeAxisMaster <= r.obMaster;
