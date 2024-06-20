@@ -82,7 +82,6 @@ begin  -- architecture rtl
     variable bytePos : integer;         -- byte positioning on slave stream
   begin  -- process
     v                  := r;
-    v.forceValidOnNext := false;
     bytePos            := conv_integer(r.count);
     -- Count num. of bytes
     byteCnt            := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
@@ -91,19 +90,24 @@ begin  -- architecture rtl
     v.ibSlave.tReady := '0';
 
     -- Choose ready source and clear valid
-    if (pipeAxisSlave.tReady = '1' or r.count < MST_BYTES_C) then
+    -- Quando il dato in uscita e' valido?
+    if (pipeAxisSlave.tReady = '1') then
       v.obMaster.tValid := '0';
+
+      -- Get Backup stream
+      v.obMaster := v.obMasterBkp;
+
+      -- Reset force tValid
+      v.forceValidOnNext := false;
     end if;
 
+    -- Quando il dato in ingresso viene preso?
     if v.obMaster.tValid = '0' then
       -- Get Inbound data
       ibM := sAxisMaster;
       if not r.forceValidOnNext then
         v.ibSlave.tReady := '1';
       end if;
-
-      -- Get Backup stream
-      v.obMaster := v.obMasterBkp;
 
       -- init when count = 0
       if (r.count = 0) then
@@ -137,7 +141,7 @@ begin  -- architecture rtl
         v.obMaster.tDest := ibM.tDest;
 
         -- Axi stream slave is filled and ready to go out
-        if bytePos >= MST_BYTES_C - 1 then
+        if bytePos > MST_BYTES_C - 1 then
           v.count           := conv_std_logic_vector(bytePos - MST_BYTES_C, v.count'length);
           v.obMaster.tValid := '1';
           v.tUserSet        := false;
