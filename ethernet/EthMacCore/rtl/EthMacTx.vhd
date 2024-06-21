@@ -33,6 +33,8 @@ entity EthMacTx is
     PHY_TYPE_G      : string                   := "XGMII";
     DROP_ERR_PKT_G  : boolean                  := true;
     JUMBO_G         : boolean                  := true;
+    -- AXI-Stream Configuration
+    PRIM_CONFIG_G   : AxiStreamConfigType      := EMAC_AXIS_CONFIG_C;
     -- Non-VLAN Configurations
     BYP_EN_G        : boolean                  := false;
     -- VLAN Configurations
@@ -80,17 +82,32 @@ end EthMacTx;
 
 architecture mapping of EthMacTx is
 
-  signal bypassMaster   : AxiStreamMasterType;
-  signal bypassSlave    : AxiStreamSlaveType;
-  signal csumMaster     : AxiStreamMasterType;
-  signal csumSlave      : AxiStreamSlaveType;
-  signal csumiCrcMaster : AxiStreamMasterType;
-  signal csumiCrcSlave  : AxiStreamSlaveType;
-  signal csumMasters    : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
-  signal csumSlaves     : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
-  signal macObMaster    : AxiStreamMasterType;
-  signal macObSlave     : AxiStreamSlaveType;
-  signal isRoCE         : sl;
+  constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
+    TSTRB_EN_C    => false,
+    TDATA_BYTES_C => 32,
+    TDEST_BITS_C  => 8,
+    TID_BITS_C    => 0,
+    TKEEP_MODE_C  => TKEEP_COMP_C,
+    TUSER_BITS_C  => 4,
+    TUSER_MODE_C  => TUSER_FIRST_LAST_C);
+
+  signal bypassMaster       : AxiStreamMasterType;
+  signal bypassSlave        : AxiStreamSlaveType;
+  signal csumMaster         : AxiStreamMasterType;
+  signal csumSlave          : AxiStreamSlaveType;
+  signal csumMasterRoCE     : AxiStreamMasterType;
+  signal csumSlaveRoCE      : AxiStreamSlaveType;
+  signal csumMasterUdp      : AxiStreamMasterType;
+  signal csumSlaveUdp       : AxiStreamSlaveType;
+  signal csumiCrcMaster     : AxiStreamMasterType;
+  signal csumiCrcSlave      : AxiStreamSlaveType;
+  signal readyForiCrcMaster : AxiStreamMasterType;
+  signal readyForiCrcSlave  : AxiStreamSlaveType;
+  signal csumMasters        : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
+  signal csumSlaves         : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
+  signal macObMaster        : AxiStreamMasterType;
+  signal macObSlave         : AxiStreamSlaveType;
+  signal isRoCE             : sl;
 
 begin
 
@@ -178,30 +195,43 @@ begin
   ----------------------------------------------------------------------------
   -- RoCE iCRC calculation
   ----------------------------------------------------------------------------
-  AxiStreamPrepareForICrc_1 : entity surf.AxiStreamPrepareForICrc
+  p_RoCE_switch : process (csumMaster, csumSlaveRoCE, csumSlaveUdp, isRoCE) is
+  begin  -- process p_RoCE_switch
+    if isRoCE = '1' then
+      csumMasterRoCE <= csumMaster;
+      csumSlave      <= csumSlaveRoCE;
+    else
+      csumMasterUdp <= csumMaster;
+      csumSlave     <= csumSlaveUdp;
+    end if;
+  end process p_RoCE_switch;
+
+  U_iCrc : entity surf.AxiStreamPrepareForICrc
     generic map (
       TPD_G => TPD_G)
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
       isRoCE      => isRoCE,
-      sAxisMaster => csumMaster,
-      sAxisSlave  => csumSlave,
+      sAxisMaster => csumMasterRoCE,
+      sAxisSlave  => csumSlaveRoCE,
       mAxisMaster => csumiCrcMaster,
       mAxisSlave  => csumiCrcSlave);
 
-  AxiStreamCompact_1 : entity surf.AxiStreamCompact
+  U_Compact : entity surf.AxiStreamCompact
     generic map (
       TPD_G               => TPD_G,
-      SLAVE_AXI_CONFIG_G  => SLAVE_AXI_CONFIG_G,
-      MASTER_AXI_CONFIG_G => MASTER_AXI_CONFIG_G)
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => ROCE_CRC32_AXI_CONFIG_C)
     port map (
-      axisClk     => axisClk,
-      axisRst     => axisRst,
-      sAxisMaster => sAxisMaster,
-      sAxisSlave  => sAxisSlave,
-      mAxisMaster => mAxisMaster,
-      mAxisSlave  => mAxisSlave);
+      axisClk     => ethClk,
+      axisRst     => ethRst,
+      sAxisMaster => csumiCrcMaster,
+      sAxisSlave  => csumiCrcSlave,
+      isRoCE      => isRoCE,
+      mAxisMaster => readyForiCrcMaster,
+      mAxisSlave  => readyForiCrcSlave);
+
 
   ------------------
   -- TX Pause Module
@@ -218,8 +248,8 @@ begin
       ethClk       => ethClk,
       ethRst       => ethRst,
       -- Incoming data from client
-      sAxisMaster  => csumMaster,
-      sAxisSlave   => csumSlave,
+      sAxisMaster  => csumMasterUdp,
+      sAxisSlave   => csumSlaveUdp,
       sAxisMasters => csumMasters,
       sAxisSlaves  => csumSlaves,
       -- Outgoing data to MAC

@@ -32,6 +32,8 @@ entity AxiStreamCompact is
   port (
     axisClk     : in  sl;
     axisRst     : in  sl;
+    -- is it a RoCE transmission?
+    isRoCE      : in  sl;
     -- Slave Port
     sAxisMaster : in  AxiStreamMasterType;
     sAxisSlave  : out AxiStreamSlaveType;
@@ -181,7 +183,7 @@ begin  -- architecture rtl
     if (RST_ASYNC_G) and (axisRst = '1') then
       r <= REG_INIT_C after TPD_G;
     elsif (rising_edge(axisClk)) then
-      if (RST_ASYNC_G = false) and (axisRst = '1') then
+      if ((RST_ASYNC_G = false) and (axisRst = '1')) or (isRoCE = '0') then
         r <= REG_INIT_C after TPD_G;
       else
         r <= rin after TPD_G;

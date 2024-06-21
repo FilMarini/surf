@@ -368,12 +368,14 @@ begin
               -- Mask off inbound UDP length/checksum
               v.tData := rxMaster.tData(127 downto 80) & x"00000000" & rxMaster.tData(47 downto 0);
             end if;
-            -- Track the number of bytes
-            v.ipv4Len(0) := r.ipv4Len(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
-            v.protLen(0) := r.protLen(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
-            -- check if its a RoCE transmission (UDP dst port = 4791)
+            -- Track the number of bytes and check if its a RoCE transmission (UDP dst port = 4791)
             if rxMaster.tData(47 downto 32) = x"B712" then
-              v.roce := '1';
+              v.roce       := '1';
+              v.ipv4Len(0) := r.ipv4Len(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2 + ROCEV2_CRC32_BYTE_WIDTH_C;
+              v.protLen(0) := r.protLen(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2 + ROCEV2_CRC32_BYTE_WIDTH_C;
+            else
+              v.ipv4Len(0) := r.ipv4Len(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
+              v.protLen(0) := r.protLen(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
             end if;
           else
             -- Fill in the IPv4 header checksum
@@ -466,13 +468,6 @@ begin
         end if;
     ----------------------------------------------------------------------
     end case;
-
-    -- Increase ipv4Len and protLen in case of RoCE transmission to include iCRC
-    if r.roce = '1' then
-      v.ipv4Len(0) := v.ipv4Len(0) + ROCEV2_CRC32_BYTE_WIDTH_C;
-      v.protLen(0) := v.protLen(0) + ROCEV2_CRC32_BYTE_WIDTH_C;
-
-    end if;
 
     -- Fill in the IPv4 header
     v.ipv4Hdr(2) := v.ipv4Len(0)(15 downto 8);  -- IPV4_Length(15 downto 8)
