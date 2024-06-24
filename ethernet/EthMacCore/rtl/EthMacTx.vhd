@@ -111,6 +111,8 @@ architecture mapping of EthMacTx is
   signal crcStreamMaster_tvalid : sl;
   signal RoceStreamMaster       : AxiStreamMasterType;
   signal RoceStreamSlave        : AxiStreamSlaveType;
+  signal RoceFixMaster          : AxiStreamMasterType;
+  signal RoceFixSlave           : AxiStreamSlaveType;
   signal csumMasters            : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
   signal csumSlaves             : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
   signal macObMaster            : AxiStreamMasterType;
@@ -208,11 +210,11 @@ begin
   begin  -- process p_RoCE_switch
     if isRoCE = '1' then
       -- Input connection
-      csumMasterRoCE  <= csumMaster;
-      csumSlave       <= csumSlaveRoCE;
+      csumMasterRoCE <= csumMaster;
+      csumSlave      <= csumSlaveRoCE;
       -- Output connection
-      csumMasterUdp   <= RoceStreamMaster;
-      RoceStreamSlave <= csumSlaveUdp;
+      csumMasterUdp  <= RoceFixMaster;
+      RoceFixSlave   <= csumSlaveUdp;
     else
       csumMasterUdp <= csumMaster;
       csumSlave     <= csumSlaveUdp;
@@ -299,6 +301,21 @@ begin
       trailerValid => crcStreamMaster_tvalid,
       mAxisMaster  => RoceStreamMaster,
       mAxisSlave   => RoceStreamSlave);
+
+
+  U_Compact_1 : entity surf.AxiStreamCompact
+    generic map (
+      TPD_G               => TPD_G,
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => PRIM_CONFIG_G)
+    port map (
+      axisClk     => ethClk,
+      axisRst     => ethRst,
+      sAxisMaster => RoceStreamMaster,
+      sAxisSlave  => RoceStreamSlave,
+      isRoCE      => isRoCE,
+      mAxisMaster => RoceFixMaster,
+      mAxisSlave  => RoceFixSlave);
 
   ------------------
   -- TX Pause Module

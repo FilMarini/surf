@@ -543,8 +543,13 @@ begin
               -- Overwrite the data field
               v.txMaster.tData(55 downto 48) := protLen(15 downto 8);
               v.txMaster.tData(63 downto 56) := protLen(7 downto 0);
-              v.txMaster.tData(71 downto 64) := protCsum(15 downto 8);
-              v.txMaster.tData(79 downto 72) := protCsum(7 downto 0);
+              if r.roce = '1' then
+                v.txMaster.tData(71 downto 64) := (others => '0');
+                v.txMaster.tData(79 downto 72) := (others => '0');
+              else
+                v.txMaster.tData(71 downto 64) := protCsum(15 downto 8);
+                v.txMaster.tData(79 downto 72) := protCsum(7 downto 0);
+              end if;
             end if;
             -- Check for mismatch between firmware/software UDP length
             if (protLen(15 downto 8) /= mMaster.tData(55 downto 48)) or (protLen(7 downto 0) /= mMaster.tData(63 downto 56)) then
