@@ -273,7 +273,7 @@ begin
       mAxisMaster => readyForiCrcMaster,
       mAxisSlave  => readyForiCrcSlave);
 
-  U_iCrcOut : entity surf.CrcAxiStreamWrapper
+  U_iCrcOut : entity surf.CrcAxiStreamWrapperSend
     port map (
       CLK                => ethClk,
       RST                => ethRst,

@@ -1,7 +1,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity CrcAxiStreamWrapper is
+entity CrcAxiStreamWrapperSend is
   port (
     CLK                : in  std_logic;
     RST                : in  std_logic;
@@ -15,11 +15,11 @@ entity CrcAxiStreamWrapper is
     m_crc_stream_valid : out std_logic;
     m_crc_stream_ready : in  std_logic
     );
-end CrcAxiStreamWrapper;
+end CrcAxiStreamWrapperSend;
 
-architecture rtl of CrcAxiStreamWrapper is
+architecture rtl of CrcAxiStreamWrapperSend is
 
-  component mkCrcRawAxiStreamCustom is
+  component mkCrcRawAxiStreamCustomSend is
     port (
       CLK                : in  std_logic;
       RST_N              : in  std_logic;
@@ -32,7 +32,7 @@ architecture rtl of CrcAxiStreamWrapper is
       m_crc_stream_data  : out std_logic_vector(31 downto 0);
       m_crc_stream_valid : out std_logic;
       m_crc_stream_ready : in  std_logic);
-  end component mkCrcRawAxiStreamCustom;
+  end component mkCrcRawAxiStreamCustomSend;
 
   signal s_rstn : std_logic;
 
@@ -40,7 +40,7 @@ begin  -- architecture rtl
 
   s_rstn <= not RST;
 
-  CrcAxiStreamWrapper_1 : mkCrcRawAxiStreamCustom
+  CrcAxiStreamWrapperSend_1 : mkCrcRawAxiStreamCustomSend
     port map (
       CLK                => CLK,
       RST_N              => s_rstn,
