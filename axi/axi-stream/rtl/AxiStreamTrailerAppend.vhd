@@ -24,41 +24,38 @@ use surf.AxiStreamPkg.all;
 entity AxiStreamTrailerAppend is
 
   generic (
-    TPD_G               : time     := 1 ns;
-    RST_ASYNC_G         : boolean  := false;
-    PIPE_STAGES_G       : natural  := 0;
-    TRAILER_DATA_BYTE_G : positive := 4;
-    AXI_CONFIG_G        : AxiStreamConfigType);
+    TPD_G                     : time    := 1 ns;
+    RST_ASYNC_G               : boolean := false;
+    PIPE_STAGES_G             : natural := 0;
+    TRAILER_AXI_CONFIG_G      : AxiStreamConfigType;
+    MASTER_SLAVE_AXI_CONFIG_G : AxiStreamConfigType);
   port (
-    axisClk      : in  sl;
-    axisRst      : in  sl;
+    axisClk            : in  sl;
+    axisRst            : in  sl;
     -- Slave port
-    sAxisMaster  : in  AxiStreamMasterType;
-    sAxisSlave   : out AxiStreamSlaveType;
+    sAxisMaster        : in  AxiStreamMasterType;
+    sAxisSlave         : out AxiStreamSlaveType;
     -- Trailer data
-    trailerData  : in  slv(TRAILER_DATA_BYTE_G*8-1 downto 0);
-    trailerValid : in  sl;
+    sAxisTrailerMaster : in  AxiStreamMasterType;
+    sAxisTrailerSlave  : out AxiStreamSlaveType;
     -- Master port
-    mAxisMaster  : out AxiStreamMasterType;
-    mAxisSlave   : in  AxiStreamSlaveType);
+    mAxisMaster        : out AxiStreamMasterType;
+    mAxisSlave         : in  AxiStreamSlaveType);
 end entity AxiStreamTrailerAppend;
 
 architecture rtl of AxiStreamTrailerAppend is
 
   type RegType is record
-    obMaster       : AxiStreamMasterType;
-    ibSlave        : AxiStreamSlaveType;
-    trailerLatched : slv(TRAILER_DATA_BYTE_G*8-1 downto 0);
-    trailerBusy    : boolean;
+    obMaster : AxiStreamMasterType;
+    ibSlaves : AxiStreamSlaveArray(1 downto 0);
+    sel      : sl;
   end record RegType;
 
   constant REG_INIT_C : RegType := (
-    obMaster       => axiStreamMasterInit(AXI_CONFIG_G),
-    ibSlave        => AXI_STREAM_SLAVE_INIT_C,
-    trailerLatched => (others => '0'),
-    trailerBusy    => false
+    obMaster => axiStreamMasterInit(MASTER_SLAVE_AXI_CONFIG_G),
+    ibSlaves => (others => AXI_STREAM_SLAVE_INIT_C),
+    sel      => '0'
     );
-  constant BYTES_C : positive := AXI_CONFIG_G.TDATA_BYTES_C;
 
   signal r   : RegType := REG_INIT_C;
   signal rin : RegType;
@@ -69,60 +66,57 @@ architecture rtl of AxiStreamTrailerAppend is
 begin  -- architecture rtl
 
   -- Make sure data widths are apropriate
-  assert (BYTES_C >= TRAILER_DATA_BYTE_G)
+  assert (MASTER_SLAVE_AXI_CONFIG_G.TDATA_BYTES_C >= TRAILER_AXI_CONFIG_G.TDATA_BYTES_C)
     report "Trailer data widths must be less or equal than axi-stream" severity failure;
 
-  comb : process (pipeAxisSlave, r, sAxisMaster, trailerData, trailerValid) is
+  comb : process (pipeAxisSlave, r, sAxisMaster, sAxisTrailerMaster) is
     variable v   : RegType;
     variable ibM : AxiStreamMasterType;
   begin  -- process comb
-    v             := r;
-    v.trailerBusy := false;
+    v := r;
 
     -- Init ready
-    v.ibSlave.tReady := '0';
-
-    -- Latch trailer
-    if trailerValid = '1' then
-      v.trailerLatched := trailerData;
-    end if;
+    for i in 0 to 1 loop
+      v.ibSlaves(i).tReady := '0';
+    end loop;  -- i
 
     -- Choose ready source and clear valid
-    if (pipeAxisSlave.tReady = '1' or r.trailerBusy) then
+    if (pipeAxisSlave.tReady = '1') then
       v.obMaster.tValid := '0';
     end if;
 
     if v.obMaster.tValid = '0' then
       -- Get inbound data
-      ibM := sAxisMaster;
-      if not r.trailerBusy then
-        v.ibSlave.tReady := '1';
+      if r.sel = '0' then
+        ibM                  := sAxisMaster;
+        v.ibSlaves(0).tReady := '1';
+        v.ibSlaves(1).tReady := '0';
+      else
+        ibM                  := sAxisTrailerMaster;
+        v.ibSlaves(1).tReady := '1';
+        v.ibSlaves(0).tReady := '0';
       end if;
 
       -- Mirror data until tLast
       if ibM.tValid = '1' then
         v.obMaster := ibM;
         if ibM.tLast = '1' then
-          v.obMaster.tLast := '0';
-          v.trailerBusy    := true;
+          v.sel := not r.sel;
+          if r.sel = '0' then
+            v.obMaster.tLast := '0';
+          else
+            -- tKeep workaround
+            v.obMaster.tKeep(v.obMaster.tKeep'length-1 downto 0)            := (others => '0');
+            v.obMaster.tKeep(TRAILER_AXI_CONFIG_G.TDATA_BYTES_C-1 downto 0) := (others => '1');
+          end if;
         end if;
-      end if;
-
-      -- Send trailer frame
-      if r.trailerBusy then
-        v.obMaster                                         := AXI_STREAM_MASTER_INIT_C;
-        v.obMaster.tKeep                                   := (others => '0');
-        v.obMaster.tStrb                                   := (others => '0');
-        v.obMaster.tData(TRAILER_DATA_BYTE_G*8-1 downto 0) := r.trailerLatched;
-        v.obMaster.tKeep(TRAILER_DATA_BYTE_G-1 downto 0)   := (others => '1');
-        v.obMaster.tLast                                   := '1';
-        v.obMaster.tValid                                  := '1';
       end if;
 
     end if;
 
-    sAxisSlave     <= v.ibSlave;
-    pipeAxisMaster <= r.obMaster;
+    sAxisSlave        <= v.ibSlaves(0);
+    sAxisTrailerSlave <= v.ibSlaves(1);
+    pipeAxisMaster    <= r.obMaster;
 
     rin <= v;
 

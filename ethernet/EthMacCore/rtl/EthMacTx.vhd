@@ -82,42 +82,55 @@ end EthMacTx;
 
 architecture mapping of EthMacTx is
 
-  constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
+  constant ROCE_CRC32CALC_AXI_CONFIG_C : AxiStreamConfigType := (
     TSTRB_EN_C    => false,
     TDATA_BYTES_C => 32,
-    TDEST_BITS_C  => 8,
+    TDEST_BITS_C  => 0,
     TID_BITS_C    => 0,
     TKEEP_MODE_C  => TKEEP_COMP_C,
-    TUSER_BITS_C  => 4,
+    TUSER_BITS_C  => 2,
     TUSER_MODE_C  => TUSER_FIRST_LAST_C);
 
-  signal bypassMaster           : AxiStreamMasterType;
-  signal bypassSlave            : AxiStreamSlaveType;
-  signal csumMaster             : AxiStreamMasterType;
-  signal csumSlave              : AxiStreamSlaveType;
-  signal csumMasterRoCE         : AxiStreamMasterType;
-  signal csumSlaveRoCE          : AxiStreamSlaveType;
-  signal csumMasterDly          : AxiStreamMasterType;
-  signal csumSlaveDly           : AxiStreamSlaveType;
-  signal csumMastersRoCE        : AxiStreamMasterArray(1 downto 0);
-  signal csumSlavesRoCE         : AxiStreamSlaveArray(1 downto 0);
-  signal csumMasterUdp          : AxiStreamMasterType;
-  signal csumSlaveUdp           : AxiStreamSlaveType;
-  signal csumiCrcMaster         : AxiStreamMasterType;
-  signal csumiCrcSlave          : AxiStreamSlaveType;
-  signal readyForiCrcMaster     : AxiStreamMasterType;
-  signal readyForiCrcSlave      : AxiStreamSlaveType;
-  signal crcStreamMaster_tdata  : slv(31 downto 0);
-  signal crcStreamMaster_tvalid : sl;
-  signal RoceStreamMaster       : AxiStreamMasterType;
-  signal RoceStreamSlave        : AxiStreamSlaveType;
-  signal RoceFixMaster          : AxiStreamMasterType;
-  signal RoceFixSlave           : AxiStreamSlaveType;
-  signal csumMasters            : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
-  signal csumSlaves             : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
-  signal macObMaster            : AxiStreamMasterType;
-  signal macObSlave             : AxiStreamSlaveType;
-  signal isRoCE                 : sl;
+  constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
+    TSTRB_EN_C    => false,
+    TDATA_BYTES_C => 4,
+    TDEST_BITS_C  => 0,
+    TID_BITS_C    => 0,
+    TKEEP_MODE_C  => TKEEP_COMP_C,
+    TUSER_BITS_C  => 2,
+    TUSER_MODE_C  => TUSER_FIRST_LAST_C);
+
+  signal bypassMaster       : AxiStreamMasterType;
+  signal bypassSlave        : AxiStreamSlaveType;
+  signal csumMaster         : AxiStreamMasterType;
+  signal csumSlave          : AxiStreamSlaveType;
+  signal csumMasterRoCE     : AxiStreamMasterType;
+  signal csumSlaveRoCE      : AxiStreamSlaveType;
+  signal csumMasterDly      : AxiStreamMasterType;
+  signal csumSlaveDly       : AxiStreamSlaveType;
+  signal csumMastersRoCE    : AxiStreamMasterArray(1 downto 0);
+  signal csumSlavesRoCE     : AxiStreamSlaveArray(1 downto 0);
+  signal csumMasterUdp      : AxiStreamMasterType;
+  signal csumSlaveUdp       : AxiStreamSlaveType;
+  signal csumiCrcMaster     : AxiStreamMasterType;
+  signal csumiCrcSlave      : AxiStreamSlaveType;
+  signal readyForiCrcMaster : AxiStreamMasterType;
+  signal readyForiCrcSlave  : AxiStreamSlaveType;
+  -- signal crcStreamMaster_tdata  : slv(31 downto 0);
+  -- signal crcStreamMaster_tvalid : sl;
+  signal crcStreamMaster    : AxiStreamMasterType;
+  signal crcStreamSlave     : AxiStreamSlaveType;
+  signal RoceStreamMaster   : AxiStreamMasterType;
+  signal RoceStreamSlave    : AxiStreamSlaveType;
+  signal RoceFixMaster      : AxiStreamMasterType;
+  signal RoceFixSlave       : AxiStreamSlaveType;
+  signal RoceFixMasterPkt   : AxiStreamMasterType;
+  signal RoceFixSlavePkt    : AxiStreamSlaveType;
+  signal csumMasters        : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
+  signal csumSlaves         : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
+  signal macObMaster        : AxiStreamMasterType;
+  signal macObSlave         : AxiStreamSlaveType;
+  signal isRoCE             : sl;
 
 begin
 
@@ -205,16 +218,16 @@ begin
   ----------------------------------------------------------------------------
   -- RoCE iCRC calculation
   ----------------------------------------------------------------------------
-  p_RoCE_switch : process (RoceStreamMaster, csumMaster, csumSlaveRoCE,
+  p_RoCE_switch : process (RoceFixMasterPkt, csumMaster, csumSlaveRoCE,
                            csumSlaveUdp, isRoCE) is
   begin  -- process p_RoCE_switch
     if isRoCE = '1' then
       -- Input connection
-      csumMasterRoCE <= csumMaster;
-      csumSlave      <= csumSlaveRoCE;
+      csumMasterRoCE  <= csumMaster;
+      csumSlave       <= csumSlaveRoCE;
       -- Output connection
-      csumMasterUdp  <= RoceFixMaster;
-      RoceFixSlave   <= csumSlaveUdp;
+      csumMasterUdp   <= RoceFixMasterPkt;
+      RoceFixSlavePkt <= csumSlaveUdp;
     else
       csumMasterUdp <= csumMaster;
       csumSlave     <= csumSlaveUdp;
@@ -234,18 +247,23 @@ begin
       mAxisMasters => csumMastersRoCE,
       mAxisSlaves  => csumSlavesRoCE);
 
-  -- pipeline the second stream to wait for iCrc
-  U_Pipeline : entity surf.AxiStreamPipeline
+  U_FifoV2 : entity surf.AxiStreamFifoV2
     generic map (
-      TPD_G         => TPD_G,
-      PIPE_STAGES_G => 19)
+      TPD_G               => TPD_G,
+      GEN_SYNC_FIFO_G     => true,
+      FIFO_ADDR_WIDTH_G   => 5,
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => PRIM_CONFIG_G)
     port map (
-      axisClk     => ethClk,
-      axisRst     => ethRst,
+      sAxisClk    => ethClk,
+      sAxisRst    => ethRst,
       sAxisMaster => csumMastersRoCE(1),
       sAxisSlave  => csumSlavesRoCE(1),
+      mAxisClk    => ethClk,
+      mAxisRst    => ethRst,
       mAxisMaster => csumMasterDly,
-      mAxisSlave  => csumSlaveDly);
+      mAxisSlave  => csumSlaveDly
+      );
 
   U_iCrc : entity surf.AxiStreamPrepareForICrc
     generic map (
@@ -263,7 +281,7 @@ begin
     generic map (
       TPD_G               => TPD_G,
       SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
-      MASTER_AXI_CONFIG_G => ROCE_CRC32_AXI_CONFIG_C)
+      MASTER_AXI_CONFIG_G => ROCE_CRC32CALC_AXI_CONFIG_C)
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
@@ -273,35 +291,29 @@ begin
       mAxisMaster => readyForiCrcMaster,
       mAxisSlave  => readyForiCrcSlave);
 
-  U_iCrcOut : entity surf.CrcAxiStreamWrapperSend
+  CrcAxiStreamWrapperSend_1 : entity surf.CrcAxiStreamWrapperSend
     port map (
-      CLK                => ethClk,
-      RST                => ethRst,
-      s_axis_tvalid      => readyForiCrcMaster.tValid,
-      s_axis_tdata       => readyForiCrcMaster.tData(255 downto 0),
-      s_axis_tkeep       => readyForiCrcMaster.tKeep(31 downto 0),
-      s_axis_tlast       => readyForiCrcMaster.tLast,
-      s_axis_tuser       => readyForiCrcMaster.tUser(0),
-      s_axis_tready      => readyForiCrcSlave.tReady,
-      m_crc_stream_data  => crcStreamMaster_tdata,
-      m_crc_stream_valid => crcStreamMaster_tvalid,
-      m_crc_stream_ready => '1');
+      axisClk     => ethClk,
+      axisRst     => ethRst,
+      sAxisMaster => readyForiCrcMaster,
+      sAxisSlave  => readyForiCrcSlave,
+      mAxisMaster => crcStreamMaster,
+      mAxisSlave  => crcStreamSlave);
 
   U_TrailerAppend : entity surf.AxiStreamTrailerAppend
     generic map (
-      TPD_G               => TPD_G,
-      TRAILER_DATA_BYTE_G => 4,
-      AXI_CONFIG_G        => PRIM_CONFIG_G)
+      TPD_G                     => TPD_G,
+      TRAILER_AXI_CONFIG_G      => ROCE_CRC32_AXI_CONFIG_C,
+      MASTER_SLAVE_AXI_CONFIG_G => PRIM_CONFIG_G)
     port map (
-      axisClk      => ethClk,
-      axisRst      => ethRst,
-      sAxisMaster  => csumMasterDly,
-      sAxisSlave   => csumSlaveDly,
-      trailerData  => crcStreamMaster_tdata,
-      trailerValid => crcStreamMaster_tvalid,
-      mAxisMaster  => RoceStreamMaster,
-      mAxisSlave   => RoceStreamSlave);
-
+      axisClk            => ethClk,
+      axisRst            => ethRst,
+      sAxisMaster        => csumMasterDly,
+      sAxisSlave         => csumSlaveDly,
+      sAxisTrailerMaster => crcStreamMaster,
+      sAxisTrailerSlave  => crcStreamSlave,
+      mAxisMaster        => RoceStreamMaster,
+      mAxisSlave         => RoceStreamSlave);
 
   U_Compact_1 : entity surf.AxiStreamCompact
     generic map (
@@ -316,6 +328,25 @@ begin
       isRoCE      => isRoCE,
       mAxisMaster => RoceFixMaster,
       mAxisSlave  => RoceFixSlave);
+
+  U_FifoPacketizer : entity surf.AxiStreamFifoV2
+    generic map (
+      TPD_G               => TPD_G,
+      VALID_THOLD_G       => 0,
+      -- VALID_BURST_MODE_G     => VALID_BURST_MODE_G,
+      GEN_SYNC_FIFO_G     => true,
+      -- FIFO_ADDR_WIDTH_G      => FIFO_ADDR_WIDTH_G,
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => PRIM_CONFIG_G)
+    port map (
+      sAxisClk    => ethClk,
+      sAxisRst    => ethRst,
+      sAxisMaster => RoceFixMaster,
+      sAxisSlave  => RoceFixSlave,
+      mAxisClk    => ethClk,
+      mAxisRst    => ethRst,
+      mAxisMaster => RoceFixMasterPkt,
+      mAxisSlave  => RoceFixSlavePkt);
 
   ------------------
   -- TX Pause Module
