@@ -6,7 +6,7 @@
 -- Author     : Filippo Marini  <filippo.marini@pd.infn.it>
 -- Company    : INFN Padova
 -- Created    : 2024-06-06
--- Last update: 2024-07-29
+-- Last update: 2024-07-30
 -- Platform   : 
 -- Standard   : VHDL'93/02
 -------------------------------------------------------------------------------
@@ -24,10 +24,15 @@ use ieee.std_logic_1164.all;
 library surf;
 use surf.StdRtlPkg.all;
 use surf.AxiStreamPkg.all;
+use surf.AxiLitePkg.all;
 use surf.SsiPkg.all;
 use surf.RocePkg.all;
 
 entity RoceEngineWrapper is
+  generic (
+    TPD_G             : time    := 1 ns;
+    EXT_ROCE_CONFIG_G : boolean := false
+    );
   port (
     RoceClk             : in  sl;
     RoceRst             : in  sl;
@@ -46,6 +51,11 @@ entity RoceEngineWrapper is
     sAxisMetaDataSlave  : out AxiStreamSlaveType;
     mAxisMetaDataMaster : out AxiStreamMasterType;
     mAxisMetaDataSlave  : in  AxiStreamSlaveType;
+    -- AXI-Lite Interface
+    axilReadMaster      : in  AxiLiteReadMasterType  := AXI_LITE_READ_MASTER_INIT_C;
+    axilReadSlave       : out AxiLiteReadSlaveType;
+    axilWriteMaster     : in  AxiLiteWriteMasterType := AXI_LITE_WRITE_MASTER_INIT_C;
+    axilWriteSlave      : out AxiLiteWriteSlaveType;
     -- DMA Interface
     dmaReadRespMaster   : in  RoceDmaReadRespMasterType;
     dmaReadRespSlave    : out RoceDmaReadRespSlaveType;
@@ -145,6 +155,15 @@ architecture rtl of RoceEngineWrapper is
   signal obUdpRoceSlave  : AxiStreamSlaveType;
   signal ibUdpRoceMaster : AxiStreamMasterType;
   signal ibUdpRoceSlave  : AxiStreamSlaveType;
+
+  signal s_axisMetaDataReqMaster     : AxiStreamMasterType;
+  signal s_axisMetaDataReqSlave      : AxiStreamSlaveType;
+  signal s_axisMetaDataRespMaster    : AxiStreamMasterType;
+  signal s_axisMetaDataRespSlave     : AxiStreamSlaveType;
+  signal s_axisMetaDataReqMasterMux  : AxiStreamMasterType;
+  signal s_axisMetaDataReqSlaveMux   : AxiStreamSlaveType;
+  signal s_axisMetaDataRespMasterMux : AxiStreamMasterType;
+  signal s_axisMetaDataRespSlaveMux  : AxiStreamSlaveType;
 
 begin  -- architecture rtl
 
@@ -276,12 +295,12 @@ begin  -- architecture rtl
       m_work_comp_sq_imm_dt      => workCompMaster.immDt,
       m_work_comp_sq_rkey_to_inv => workCompMaster.rkeyToInv,
       m_work_comp_sq_ready       => workCompSlave.ready,
-      s_meta_data_tvalid         => sAxisMetaDataMaster.tValid,
-      s_meta_data_tdata          => sAxisMetaDataMaster.tData(302 downto 0),
-      s_meta_data_tready         => sAxisMetaDataSlave.tReady,
-      m_meta_data_tvalid         => mAxisMetaDataMaster.tValid,
-      m_meta_data_tdata          => mAxisMetaDataMaster.tData(275 downto 0),
-      m_meta_data_tready         => mAxisMetaDataSlave.tReady,
+      s_meta_data_tvalid         => s_axisMetaDataReqMasterMux.tValid,
+      s_meta_data_tdata          => s_axisMetaDataReqMasterMux.tData(302 downto 0),
+      s_meta_data_tready         => s_axisMetaDataReqSlaveMux.tReady,
+      m_meta_data_tvalid         => s_axisMetaDataRespMasterMux.tValid,
+      m_meta_data_tdata          => s_axisMetaDataRespMasterMux.tData(275 downto 0),
+      m_meta_data_tready         => s_axisMetaDataRespSlaveMux.tReady,
       m_dma_read_valid           => dmaReadReqMaster.valid,
       m_dma_read_initiator       => dmaReadReqMaster.initiator,
       m_dma_read_sqpn            => dmaReadReqMaster.sQpn,
@@ -298,5 +317,51 @@ begin  -- architecture rtl
       s_dma_read_data_stream     => dmaReadRespMaster.dataStream,
       s_dma_read_ready           => dmaReadRespSlave.ready
       );
+
+  -----------------------------------------------------------------------------
+  -- RoCE Metadata Configurator
+  -----------------------------------------------------------------------------
+  ROCE_EXT_CONFIG_GEN : if EXT_ROCE_CONFIG_G generate
+    s_axisMetaDataReqMaster <= AXI_STREAM_MASTER_INIT_C;
+    s_axisMetaDataRespSlave <= AXI_STREAM_SLAVE_INIT_C;
+  end generate ROCE_EXT_CONFIG_GEN;
+
+  ROCE_INT_CONFIG_GEN: if not EXT_ROCE_CONFIG_G generate
+    RoceConfigurator_1 : entity surf.RoceConfigurator
+      generic map (
+        TPD_G => TPD_G
+        )
+      port map (
+        RoceClk                   => RoceClk,
+        RoceRst                   => RoceRst,
+        mAxisMetaDataReqMaster_o  => s_axisMetaDataReqMaster,
+        mAxisMetaDataReqSlave_i   => s_axisMetaDataReqSlave,
+        sAxisMetaDataRespMaster_i => s_axisMetaDataRespMaster,
+        sAxisMetaDataRespSlave_o  => s_axisMetaDataRespSlave,
+        axilReadMaster            => axilReadMaster,
+        axilReadSlave             => axilReadSlave,
+        axilWriteMaster           => axilWriteMaster,
+        axilWriteSlave            => axilWriteSlave);
+  end generate ROCE_INT_CONFIG_GEN;
+
+  -----------------------------------------------------------------------------
+  -- Axi-Stream Metadata source selection
+  -----------------------------------------------------------------------------
+  metaSel : process (mAxisMetaDataSlave, sAxisMetaDataMaster,
+                     s_axisMetaDataReqMaster, s_axisMetaDataReqSlaveMux,
+                     s_axisMetaDataRespMasterMux, s_axisMetaDataRespSlave) is
+  begin  -- process metadata_source_select
+    if EXT_ROCE_CONFIG_G then
+      s_axisMetaDataReqMasterMux <= sAxisMetaDataMaster;
+      sAxisMetaDataSlave         <= s_axisMetaDataReqSlaveMux;
+      mAxisMetaDataMaster        <= s_axisMetaDataRespMasterMux;
+      s_axisMetaDataRespSlaveMux <= mAxisMetaDataSlave;
+    else
+      s_axisMetaDataReqMasterMux <= s_axisMetaDataReqMaster;
+      s_axisMetaDataReqSlave     <= s_axisMetaDataReqSlaveMux;
+      s_axisMetaDataRespMaster   <= s_axisMetaDataRespMasterMux;
+      s_axisMetaDataRespSlaveMux <= s_axisMetaDataRespSlave;
+    end if;
+  end process metaSel;
 
 end architecture rtl;
