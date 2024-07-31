@@ -123,6 +123,16 @@ package RocePkg is
     mrIdx     : sl;
   end record RoceDmaReadReqMasterType;
 
+  constant ROCE_DMA_READ_REQ_MASTER_INIT_C : RoceDmaReadReqMasterType := (
+    valid     => '0',
+    initiator => (others => '0'),
+    sQpn      => (others => '0'),
+    wrId      => (others => '0'),
+    startAddr => (others => '0'),
+    len       => (others => '0'),
+    mrIdx     => '0'
+    );
+
   type RoceDmaReadReqSlaveType is record
     ready : sl;
   end record RoceDmaReadReqSlaveType;
@@ -141,6 +151,15 @@ package RocePkg is
     isRespErr  : sl;
     dataStream : slv(289 downto 0);
   end record RoceDmaReadRespMasterType;
+
+  constant ROCE_DMA_READ_RESP_MASTER_INIT_C : RoceDmaReadRespMasterType := (
+    valid      => '0',
+    initiator  => (others => '0'),
+    sQpn       => (others => '0'),
+    wrId       => (others => '0'),
+    isRespErr  => '0',
+    dataStream => (others => '0')
+    );
 
   type RoceDmaReadRespSlaveType is record
     ready : sl;
@@ -198,6 +217,22 @@ package RocePkg is
 
   function ToDmaReadReqSlaveType (
     ready : sl)
+    return RoceDmaReadReqSlaveType;
+
+  function DmaReadReqToAxiStreamMaster (
+    wrIn : RoceDmaReadReqMasterType)
+    return AxiStreamMasterType;
+
+  function DmaReadReqToAxiStreamSlave (
+    wrIn : RoceDmaReadReqSlaveType)
+    return AxiStreamSlaveType;
+
+  function AxiStreamToDmaReadReqMaster (
+    wrIn : AxiStreamMasterType)
+    return RoceDmaReadReqMasterType;
+
+  function AxiStreamToDmaReadReqSlave (
+    wrIn : AxiStreamSlaveType)
     return RoceDmaReadReqSlaveType;
 
   -- function FromRoceWorkReqSlaveType (
@@ -321,6 +356,55 @@ package body RocePkg is
     ret.ready := ready;
     return ret;
   end function ToDmaReadReqSlaveType;
+
+  function DmaReadReqToAxiStreamMaster (
+    wrIn : RoceDmaReadReqMasterType)
+    return AxiStreamMasterType is
+    variable ret : AxiStreamMasterType;
+  begin  -- function RoceWorkReqToAxiStream
+    ret                     := AXI_STREAM_MASTER_INIT_C;
+    ret.tValid              := wrIn.valid;
+    ret.tData(169 downto 0) := wrIn.initiator &
+                               wrIn.sQpn &
+                               wrIn.wrId &
+                               wrIn.startAddr &
+                               wrIn.len &
+                               wrIn.mrIdx;
+    return ret;
+  end function DmaReadReqToAxiStreamMaster;
+
+  function DmaReadReqToAxiStreamSlave (
+    wrIn : RoceDmaReadReqSlaveType)
+    return AxiStreamSlaveType is
+    variable ret : AxiStreamSlaveType;
+  begin  -- function RoceWorkReqToAxiStream
+    ret.tReady := wrIn.ready;
+    return ret;
+  end function DmaReadReqToAxiStreamSlave;
+
+  function AxiStreamToDmaReadReqMaster (
+    wrIn : AxiStreamMasterType)
+    return RoceDmaReadReqMasterType is
+    variable ret : RoceDmaReadReqMasterType;
+  begin  -- function AxiStreamToRoceWorkReq
+    ret.valid     := wrIn.tValid;
+    ret.mrIdx     := wrIn.tData(0);
+    ret.len       := wrIn.tData(13 downto 1);
+    ret.startAddr := wrIn.tData(77 downto 14);
+    ret.wrId      := wrIn.tData(141 downto 78);
+    ret.sQpn      := wrIn.tData(165 downto 142);
+    ret.initiator := wrIn.tData(169 downto 166);
+    return ret;
+  end function AxiStreamToDmaReadReqMaster;
+
+  function AxiStreamToDmaReadReqSlave (
+    wrIn : AxiStreamSlaveType)
+    return RoceDmaReadReqSlaveType is
+    variable ret : RoceDmaReadReqSlaveType;
+  begin  -- function AxiStreamToRoceWorkReq
+    ret.ready := wrIn.tReady;
+    return ret;
+  end function AxiStreamToDmaReadReqSlave;
 
   -- function FromRoceWorkReqSlaveType (
   --   roceWorkReqSlave : RoceWorkReqSlaveType)
