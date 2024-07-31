@@ -6,7 +6,7 @@
 -- Author     : Filippo Marini  <filippo.marini@pd.infn.it>
 -- Company    : INFN Padova
 -- Created    : 2024-07-30
--- Last update: 2024-07-30
+-- Last update: 2024-07-31
 -- Platform   : 
 -- Standard   : VHDL'93/02
 -------------------------------------------------------------------------------
@@ -177,7 +177,7 @@ begin
       when st1_dump_config =>
         v.txMaster.tData(302 downto 0) := regR.metaData;
         v.txMaster.tValid              := '1';
-        if v.txMaster.tValid = '0' then
+        if mAxisMetaDataReqSlave_i.tReady = '1' then
           v.state := st2_get_response;
         end if;
       -----------------------------------------------------------------------
