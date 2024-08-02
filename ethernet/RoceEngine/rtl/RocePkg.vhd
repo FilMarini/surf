@@ -103,6 +103,19 @@ package RocePkg is
     rKeyToInv : slv(32 downto 0);
   end record RoceWorkCompMasterType;
 
+  constant ROCE_WORK_COMP_MASTER_INIT_C : RoceWorkCompMasterType := (
+    valid     => '0',
+    id        => (others => '0'),
+    opCode    => (others => '0'),
+    flags     => (others => '0'),
+    status    => (others => '0'),
+    len       => (others => '0'),
+    pKey      => (others => '0'),
+    qpn       => (others => '0'),
+    immDt     => (others => '0'),
+    rKeyToInv => (others => '0')
+    );
+
   type RoceWorkCompSlaveType is record
     ready : sl;
   end record RoceWorkCompSlaveType;
@@ -234,6 +247,22 @@ package RocePkg is
   function AxiStreamToDmaReadReqSlave (
     wrIn : AxiStreamSlaveType)
     return RoceDmaReadReqSlaveType;
+
+  -- function WorkReqToAxiStreamMaster (
+  --   wrIn : RoceWorkReqMasterType)
+  --   return AxiStreamMasterType;
+
+  -- function AxiStreamToWorkReqMaster (
+  --   wrIn : AxiStreamMasterType)
+  --   return RoceWorkReqMasterType;
+
+  -- function WorkReqToAxiStreamSlave (
+  --   wrIn : RoceWorkReqSlaveType)
+  --   return AxiStreamSlaveType;
+
+  -- function AxiStreamToWorkReqSlave (
+  --   wrIn : AxiStreamSlaveType)
+  --   return RoceWorkReqSlaveType;
 
   -- function FromRoceWorkReqSlaveType (
   --   roceWorkReqSlave : RoceWorkReqSlaveType)
