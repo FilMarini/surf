@@ -15,7 +15,9 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.std_logic_unsigned.all;
-use ieee.std_logic_arith.all;
+-- use ieee.std_logic_arith.all;
+use ieee.numeric_std.all;
+
 
 library surf;
 use surf.StdRtlPkg.all;
@@ -44,25 +46,61 @@ end entity AxiStreamCompact;
 
 architecture rtl of AxiStreamCompact is
 
+  function getTKeepMin (
+    tKeep      : slv;
+    axisConfig : AxiStreamConfigType
+    )
+    return natural is
+    variable tKeepFull : slv(AXI_STREAM_MAX_TKEEP_WIDTH_C-1 downto 0);
+    variable i         : natural;
+  begin  -- function getTKeepRange
+    tKeepFull := resize(tKeep, AXI_STREAM_MAX_TKEEP_WIDTH_C);
+    for i in 0 to axisConfig.TDATA_BYTES_C-1 loop
+      if tKeepFull(i) = '1' then
+        return i;
+      end if;
+    end loop;  -- i
+  end function getTKeepMin;
+
+  function getTKeepMax (
+    tKeep      : slv;
+    axisConfig : AxiStreamConfigType
+    )
+    return natural is
+    variable tKeepFull : slv(AXI_STREAM_MAX_TKEEP_WIDTH_C-1 downto 0);
+    variable i         : natural;
+  begin  -- function getTKeepRange
+    tKeepFull := resize(tKeep, AXI_STREAM_MAX_TKEEP_WIDTH_C);
+    for i in axisConfig.TDATA_BYTES_C-1 downto 0 loop
+      if tKeepFull(i) = '1' then
+        return i;
+      end if;
+    end loop;  -- i
+  end function getTKeepMax;
+
   constant SLV_BYTES_C : positive := SLAVE_AXI_CONFIG_G.TDATA_BYTES_C;
   constant MST_BYTES_C : positive := MASTER_AXI_CONFIG_G.TDATA_BYTES_C;
 
   type RegType is record
-    count            : slv(bitSize(MST_BYTES_C)-1 downto 0);
-    obMaster         : AxiStreamMasterType;
-    obMasterBkp      : AxiStreamMasterType;
-    ibSlave          : AxiStreamSlaveType;
-    forceValidOnNext : boolean;
-    tUserSet         : boolean;
+    -- count            : slv(bitSize(MST_BYTES_C)-1 downto 0);
+    count       : natural;
+    obMaster    : AxiStreamMasterType;
+    ibSlave     : AxiStreamSlaveType;
+    tLastDet    : boolean;
+    tLastOnNext : boolean;
+    tUserSet    : boolean;
+    fullBus     : boolean;
   end record RegType;
 
   constant REG_INIT_C : RegType := (
-    count            => (others => '0'),
-    obMaster         => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
-    obMasterBkp      => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
-    ibSlave          => AXI_STREAM_SLAVE_INIT_C,
-    forceValidOnNext => false,
-    tUserSet         => false
+    -- count            => (others => '0'),
+    count       => 0,
+    obMaster    => axiStreamMasterInit(MASTER_AXI_CONFIG_G),
+    ibSlave     => AXI_STREAM_SLAVE_INIT_C,
+    tLastDet    => false,
+    tLastOnNext => false,
+    tUserSet    => false,
+    fullBus     => false
     );
 
   signal r   : RegType := REG_INIT_C;
@@ -78,103 +116,118 @@ begin  -- architecture rtl
     report "Master data widths must be greater or equal than slave" severity failure;
 
   comb : process (pipeAxisSlave, r, sAxisMaster) is
-    variable v       : RegType;
-    variable ibM     : AxiStreamMasterType;
-    variable byteCnt : integer;  -- Number of valid bytes in incoming bus
-    variable bytePos : integer;         -- byte positioning on slave stream
+    variable v          : RegType;
+    variable tKeepMin   : natural;
+    variable tKeepWidth : natural;
+    variable tDataWidth : natural;
+    variable tDataMin   : natural;
+    variable tDataCount : natural;
+    variable tDataVar   : slv(sAxisMaster.tData'range);
   begin  -- process
-    v       := r;
-    bytePos := conv_integer(r.count);
-    -- Count num. of bytes
-    byteCnt := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
+    -- Latch current value
+    v := r;
 
     -- Init ready
     v.ibSlave.tReady := '0';
+    v.fullBus        := false;
+    v.tLastDet       := false;
+    v.tLastOnNext    := false;
 
     -- Choose ready source and clear valid
     if (pipeAxisSlave.tReady = '1') then
       v.obMaster.tValid := '0';
-
-      -- Get Backup stream
-      v.obMaster := v.obMasterBkp;
-
-      -- Reset force tValid
-      v.forceValidOnNext := false;
     end if;
 
     -- Accept input data
-    if v.obMaster.tValid = '0' and not r.forceValidOnNext then
-      -- Get Inbound data
-      ibM              := sAxisMaster;
+    if v.obMaster.tValid = '0' and not r.tLastOnNext then
+
+      -- Ready to accept
       v.ibSlave.tReady := '1';
 
-      -- init when count = 0
-      if (r.count = 0) then
-        v.obMaster       := axiStreamMasterInit(MASTER_AXI_CONFIG_G);
-        v.obMaster.tKeep := (others => '0');
-      end if;
+      -- Input data is valid
+      if sAxisMaster.tValid = '1' then
 
-      if ibM.tValid = '1' then
-        v.obMasterBkp       := AXI_STREAM_MASTER_INIT_C;
-        v.obMasterBkp.tKeep := (others => '0');
-        v.obMasterBkp.tStrb := (others => '0');
-        for i in 0 to SLV_BYTES_C - 1 loop
-          if ibM.tKeep(i) = '1' and bytePos <= MST_BYTES_C - 1 then
-            v.obMaster.tData((bytePos*8)+7 downto (bytePos*8)) := ibM.tData((i*8)+7 downto (i*8));
-            v.obMaster.tKeep(bytePos)                          := '1';
-            if not r.tUserSet then
-              v.obMaster.tUser := ibM.tUser;
-              v.tUserSet       := true;
-            end if;
-            v.obMaster.tStrb := ibM.tStrb;
-          elsif ibM.tKeep(i) = '1' and bytePos > MST_BYTES_C - 1 then
-            v.obMasterBkp.tData(((bytePos - MST_BYTES_C)*8)+7 downto ((bytePos - MST_BYTES_C)*8)) := ibM.tData((i*8)+7 downto (i*8));
-            v.obMasterBkp.tKeep(bytePos - MST_BYTES_C)                                            := '1';
-          end if;
-          if ibM.tKeep(i) = '1' then
-            bytePos := bytePos + 1;
-          end if;
-        end loop;  -- i
+        -- get tKeet boundaries
+        tKeepMin   := getTKeepMin(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
+        tKeepWidth := getTKeep(sAxisMaster.tKeep, SLAVE_AXI_CONFIG_G);
+        tDataWidth := to_integer(shift_left(to_unsigned(tKeepWidth, SLV_BYTES_C), 3));
+        tDataCount := to_integer(shift_left(to_unsigned(r.count, SLV_BYTES_C), 3));
+        tDataMin   := to_integer(shift_left(to_unsigned(tKeepMin, SLV_BYTES_C), 3));
 
-        v.obMaster.tId   := ibM.tId;
-        v.obMaster.tDest := ibM.tDest;
-
-        -- Axi stream slave is filled and ready to go out
-        if bytePos > MST_BYTES_C - 1 then
-          v.count           := conv_std_logic_vector(bytePos - MST_BYTES_C, v.count'length);
-          v.obMaster.tValid := '1';
-          v.tUserSet        := false;
-          if ibM.tLast = '1' then
-            if bytePos = MST_BYTES_C then
-              v.obMaster.tLast := '1';
-            else
-              v.forceValidOnNext := true;
-            end if;
-          end if;
-        -- Axi stream not yet filled
-        else
-          v.count       := conv_std_logic_vector(bytePos, v.count'length);
-          v.obMasterBkp := v.obMaster;
-          if ibM.tLast = '1' then
-            v.obMaster.tValid := '1';
-            v.obMaster.tLast  := '1';
-            v.count           := (others => '0');
+        -- Checks
+        -- -- Overflow
+        if tKeepWidth + r.count >= MASTER_AXI_CONFIG_G.TDATA_BYTES_C then
+          v.fullBus := true;
+        end if;
+        -- -- tLast
+        v.tLastDet := false;
+        -- v.tLastDet := r.tLastOnNext;
+        if sAxisMaster.tLast = '1' then
+          v.tLastDet := true;
+          if tKeepWidth + r.count > MST_BYTES_C then
+            v.tLastDet    := false;
+            v.tLastOnNext := true;
           end if;
         end if;
-      end if;
 
-    -- Flush backup stream with tLast flag
-    elsif r.forceValidOnNext then
-      v.obMaster.tValid := '1';
-      v.obMaster.tLast  := '1';
-      v.count           := (others => '0');
+        -- Gen bus
+        -- Shift if bus was full
+        if r.fullBus and not r.tLastOnNext then
+          v.obMaster.tData := std_logic_vector(shift_right(unsigned(r.obMaster.tData), MST_BYTES_C*8));
+        end if;
+        ---- Remove initial bits
+        tDataVar                                                                 := std_logic_vector(shift_right(unsigned(sAxisMaster.tData), tDataMin));
+        v.obMaster.tData(v.obMaster.tData'length-1 downto tDataCount+tDataWidth) := (others => '0');
+        v.obMaster.tData(tDataCount+tDataWidth-1 downto tDataCount)              := tDataVar(tDataWidth-1 downto 0);
+        v.obMaster.tKeep                                                         := (others => '0');
+        v.obMaster.tKeep(r.count+tKeepWidth-1 downto 0)                          := (others => '1');
+        if not r.tUserSet then
+          v.obMaster.tUser := sAxisMaster.tUser;
+          v.tUserSet       := true;
+        end if;
+
+        -- Update counter
+        v.count := r.count + tKeepWidth;
+
+      end if;
     end if;
 
+    -- Bus is full
+    if v.fullBus or v.tLastDet or r.tLastOnNext then
+      -- Set tValid
+      v.obMaster.tValid := '1';
+      -- Update bit counter and shift data
+      if v.fullBus then
+        v.count := r.count + tKeepWidth - MST_BYTES_C;
+      else
+        v.count := 0;
+      end if;
+      -- Set tLast
+      if v.tLastDet and not v.tLastOnNext then
+        v.obMaster.tLast := '1';
+      else
+        v.obMaster.tLast := '0';
+      end if;
+      -- Set tData in case of forced tLast
+      if r.tLastOnNext then
+        v.obMaster.tData := std_logic_vector(shift_right(unsigned(r.obMaster.tData), MST_BYTES_C*8));
+        v.obMaster.tKeep := std_logic_vector(shift_right(unsigned(r.obMaster.tKeep), MST_BYTES_C));
+        v.obMaster.tLast := '1';
+      end if;
+      v.tUserSet := false;
+    end if;
 
-    sAxisSlave     <= v.ibSlave;
-    pipeAxisMaster <= r.obMaster;
+    sAxisSlave                                                               <= v.ibSlave;
+    pipeAxisMaster.tData(pipeAxisMaster.tData'length-1 downto MST_BYTES_C*8) <= (others => '0');
+    pipeAxisMaster.tData((MST_BYTES_C*8)-1 downto 0)                         <= r.obMaster.tData((MST_BYTES_C*8)-1 downto 0);
+    pipeAxisMaster.tKeep(pipeAxisMaster.tKeep'length-1 downto MST_BYTES_C)   <= (others => '0');
+    pipeAxisMaster.tKeep((MST_BYTES_C)-1 downto 0)                           <= r.obMaster.tKeep((MST_BYTES_C)-1 downto 0);
+    pipeAxisMaster.tValid                                                    <= r.obMaster.tValid;
+    pipeAxisMaster.tUser                                                     <= r.obMaster.tUser;
+    pipeAxisMaster.tLast                                                     <= r.obMaster.tLast;
 
     rin <= v;
+
 
   end process comb;
 
