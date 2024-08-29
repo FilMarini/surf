@@ -318,6 +318,8 @@ begin
             end if;
             if sAxisMaster.tData(47 downto 32) = x"B712" then
               v.roce := '1';
+            else
+              v.roce := '0';
             end if;
             -- Track the number of bytes (include IPv4 header offset from previous state)
             v.byteCnt := getTKeep(sAxisMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) + 18;
