@@ -108,6 +108,8 @@ architecture mapping of EthMacTx is
   signal csumSlaveRoCE      : AxiStreamSlaveType;
   signal csumMasterDly      : AxiStreamMasterType;
   signal csumSlaveDly       : AxiStreamSlaveType;
+  signal csumDmMasters      : AxiStreamMasterArray(1 downto 0);
+  signal csumDmSlaves       : AxiStreamSlaveArray(1 downto 0);
   signal csumMastersRoCE    : AxiStreamMasterArray(1 downto 0);
   signal csumSlavesRoCE     : AxiStreamSlaveArray(1 downto 0);
   signal csumMasterUdp      : AxiStreamMasterType;
@@ -124,13 +126,14 @@ architecture mapping of EthMacTx is
   signal RoceStreamSlave    : AxiStreamSlaveType;
   signal RoceFixMaster      : AxiStreamMasterType;
   signal RoceFixSlave       : AxiStreamSlaveType;
-  signal RoceFixMasterPkt   : AxiStreamMasterType;
-  signal RoceFixSlavePkt    : AxiStreamSlaveType;
+  signal roceMasters        : AxiStreamMasterArray(1 downto 0);
+  signal roceSlaves         : AxiStreamSlaveArray(1 downto 0);
+  -- signal RoceFixMasterPkt   : AxiStreamMasterType;
+  -- signal RoceFixSlavePkt    : AxiStreamSlaveType;
   signal csumMasters        : AxiStreamMasterArray(VLAN_SIZE_G-1 downto 0);
   signal csumSlaves         : AxiStreamSlaveArray(VLAN_SIZE_G-1 downto 0);
   signal macObMaster        : AxiStreamMasterType;
   signal macObSlave         : AxiStreamSlaveType;
-  signal isRoCE             : sl;
 
 begin
 
@@ -173,7 +176,6 @@ begin
       ipCsumEn    => ethConfig.ipCsumEn,
       tcpCsumEn   => ethConfig.tcpCsumEn,
       udpCsumEn   => ethConfig.udpCsumEn,
-      isRoCE      => isRoCE,
       -- Outbound data to MAC
       sAxisMaster => bypassMaster,
       sAxisSlave  => bypassSlave,
@@ -218,21 +220,20 @@ begin
   ----------------------------------------------------------------------------
   -- RoCE iCRC calculation
   ----------------------------------------------------------------------------
-  p_RoCE_switch : process (RoceFixMasterPkt, csumMaster, csumSlaveRoCE,
-                           csumSlaveUdp, isRoCE) is
-  begin  -- process p_RoCE_switch
-    if isRoCE = '1' then
-      -- Input connection
-      csumMasterRoCE  <= csumMaster;
-      csumSlave       <= csumSlaveRoCE;
-      -- Output connection
-      csumMasterUdp   <= RoceFixMasterPkt;
-      RoceFixSlavePkt <= csumSlaveUdp;
-    else
-      csumMasterUdp <= csumMaster;
-      csumSlave     <= csumSlaveUdp;
-    end if;
-  end process p_RoCE_switch;
+  U_DeMux : entity surf.AxiStreamDeMux
+    generic map (
+      TPD_G         => TPD_G,
+      NUM_MASTERS_G => 2,
+      MODE_G        => "INDEXED",
+      TDEST_HIGH_G  => 1,
+      TDEST_LOW_G   => 0)
+    port map (
+      axisClk      => ethClk,
+      axisRst      => ethRst,
+      sAxisMaster  => csumMaster,
+      sAxisSlave   => csumSlave,
+      mAxisMasters => csumDmMasters,
+      mAxisSlaves  => csumDmSlaves);
 
   -- double the stream
   U_Repeater : entity surf.AxiStreamRepeater
@@ -242,8 +243,8 @@ begin
     port map (
       axisClk      => ethClk,
       axisRst      => ethRst,
-      sAxisMaster  => csumMasterRoce,
-      sAxisSlave   => csumSlaveRoce,
+      sAxisMaster  => csumDmMasters(1),
+      sAxisSlave   => csumDmSlaves(1),
       mAxisMasters => csumMastersRoCE,
       mAxisSlaves  => csumSlavesRoCE);
 
@@ -262,8 +263,7 @@ begin
       mAxisClk    => ethClk,
       mAxisRst    => ethRst,
       mAxisMaster => csumMasterDly,
-      mAxisSlave  => csumSlaveDly
-      );
+      mAxisSlave  => csumSlaveDly);
 
   U_iCrc : entity surf.AxiStreamPrepareForICrc
     generic map (
@@ -271,7 +271,7 @@ begin
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       sAxisMaster => csumMastersRoCE(0),
       sAxisSlave  => csumSlavesRoCE(0),
       mAxisMaster => csumiCrcMaster,
@@ -287,7 +287,7 @@ begin
       axisRst     => ethRst,
       sAxisMaster => csumiCrcMaster,
       sAxisSlave  => csumiCrcSlave,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       mAxisMaster => readyForiCrcMaster,
       mAxisSlave  => readyForiCrcSlave);
 
@@ -325,11 +325,14 @@ begin
       axisRst     => ethRst,
       sAxisMaster => RoceStreamMaster,
       sAxisSlave  => RoceStreamSlave,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       mAxisMaster => RoceFixMaster,
       mAxisSlave  => RoceFixSlave);
 
-  U_FifoPacketizer : entity surf.AxiStreamFifoV2
+  --------------------
+  -- Packetizer FIFOs
+  --------------------
+  U_FifoPacketizer_Roce : entity surf.AxiStreamFifoV2
     generic map (
       TPD_G               => TPD_G,
       VALID_THOLD_G       => 0,
@@ -345,8 +348,46 @@ begin
       sAxisSlave  => RoceFixSlave,
       mAxisClk    => ethClk,
       mAxisRst    => ethRst,
-      mAxisMaster => RoceFixMasterPkt,
-      mAxisSlave  => RoceFixSlavePkt);
+      mAxisMaster => roceMasters(1),
+      mAxisSlave  => roceSlaves(1));
+
+  U_FifoPacketizer_Udp : entity surf.AxiStreamFifoV2
+    generic map (
+      TPD_G               => TPD_G,
+      VALID_THOLD_G       => 0,
+      -- VALID_BURST_MODE_G     => VALID_BURST_MODE_G,
+      GEN_SYNC_FIFO_G     => true,
+      -- FIFO_ADDR_WIDTH_G      => FIFO_ADDR_WIDTH_G,
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => PRIM_CONFIG_G)
+    port map (
+      sAxisClk    => ethClk,
+      sAxisRst    => ethRst,
+      sAxisMaster => csumDmMasters(0),
+      sAxisSlave  => csumDmSlaves(0),
+      mAxisClk    => ethClk,
+      mAxisRst    => ethRst,
+      mAxisMaster => roceMasters(0),
+      mAxisSlave  => roceSlaves(0));
+
+  -----------------------
+  -- RoCE - Normal MUX
+  -----------------------
+  AxiStreamMux_1 : entity surf.AxiStreamMux
+    generic map (
+      TPD_G                => TPD_G,
+      NUM_SLAVES_G         => 2,
+      ILEAVE_EN_G          => true,
+      ILEAVE_ON_NOTVALID_G => true,
+      MODE_G               => "PASSTHROUGH",
+      TID_MODE_G           => "PASSTHROUGH")
+    port map (
+      axisClk      => ethClk,
+      axisRst      => ethRst,
+      sAxisMasters => roceMasters,
+      sAxisSlaves  => roceSlaves,
+      mAxisMaster  => csumMasterUdp,
+      mAxisSlave   => csumSlaveUdp);
 
   ------------------
   -- TX Pause Module

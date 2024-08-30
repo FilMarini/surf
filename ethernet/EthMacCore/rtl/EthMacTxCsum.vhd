@@ -40,7 +40,6 @@ entity EthMacTxCsum is
     ipCsumEn    : in  sl;
     tcpCsumEn   : in  sl;
     udpCsumEn   : in  sl;
-    isRoCE      : out sl;
     -- Outbound data to MAC
     sAxisMaster : in  AxiStreamMasterType;
     sAxisSlave  : out AxiStreamSlaveType;
@@ -80,7 +79,7 @@ architecture rtl of EthMacTxCsum is
     tranRd   : sl;
     mvCnt    : natural range 0 to 4;
     dbg      : slv(5 downto 0);
-    roce     : sl;
+    roce     : slv(EMAC_CSUM_PIPELINE_C+1 downto 0);
     rxSlave  : AxiStreamSlaveType;
     txMaster : AxiStreamMasterType;
     mSlave   : AxiStreamSlaveType;
@@ -107,7 +106,7 @@ architecture rtl of EthMacTxCsum is
     tranRd   => '0',
     mvCnt    => 0,
     dbg      => (others => '0'),
-    roce     => '0',
+    roce     => (others => '0'),
     rxSlave  => AXI_STREAM_SLAVE_INIT_C,
     txMaster => AXI_STREAM_MASTER_INIT_C,
     mSlave   => AXI_STREAM_SLAVE_INIT_C,
@@ -126,6 +125,7 @@ architecture rtl of EthMacTxCsum is
   signal txMaster : AxiStreamMasterType;
   signal txSlave  : AxiStreamSlaveType;
 
+  signal roce      : sl;
   signal tranPause : sl;
   signal fragDet   : sl;
   signal eofeDet   : sl;
@@ -214,6 +214,7 @@ begin
     v.tcpDet  := r.tcpDet(EMAC_CSUM_PIPELINE_C downto 0) & r.tcpDet(0);
     v.ipv4Len := r.ipv4Len(EMAC_CSUM_PIPELINE_C downto 0) & r.ipv4Len(0);
     v.protLen := r.protLen(EMAC_CSUM_PIPELINE_C downto 0) & r.protLen(0);
+    v.roce    := r.roce(EMAC_CSUM_PIPELINE_C downto 0) & r.roce(0);
 
     -- Check for UDP frame
     if (r.udpDet(EMAC_CSUM_PIPELINE_C-1) = '1') then
@@ -235,6 +236,7 @@ begin
         v.udpDet(0)  := '0';
         v.tcpDet(0)  := '0';
         v.tcpFlag    := '0';
+        v.roce(0)    := '0';
         -- Reset accumulators
         v.ipv4Len(0) := toSlv(20, 16);
         v.protLen(0) := (others => '0');
@@ -370,11 +372,11 @@ begin
             end if;
             -- Track the number of bytes and check if its a RoCE transmission (UDP dst port = 4791)
             if rxMaster.tData(47 downto 32) = x"B712" then
-              v.roce       := '1';
+              v.roce(0)    := '1';
               v.ipv4Len(0) := r.ipv4Len(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2 + ROCEV2_CRC32_BYTE_WIDTH_C;
               v.protLen(0) := r.protLen(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2 + ROCEV2_CRC32_BYTE_WIDTH_C;
             else
-              v.roce       := '0';
+              v.roce(0)    := '0';
               v.ipv4Len(0) := r.ipv4Len(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
               v.protLen(0) := r.protLen(0) + getTKeep(rxMaster.tKeep, INT_EMAC_AXIS_CONFIG_C) - 2;
             end if;
@@ -482,6 +484,11 @@ begin
         v.mSlave.tReady := '1';
         -- Move data
         v.txMaster      := mMaster;
+        if roce = '1' then
+          v.txMaster.tDest(0) := '1';
+        else
+          v.txMaster.tDest(0) := '0';
+        end if;
         -- Check if not forwarding EOFE frames
         if (DROP_ERR_PKT_G = true) and (eofeDet = '1') then
           -- Do NOT move data
@@ -544,7 +551,7 @@ begin
               -- Overwrite the data field
               v.txMaster.tData(55 downto 48) := protLen(15 downto 8);
               v.txMaster.tData(63 downto 56) := protLen(7 downto 0);
-              if r.roce = '1' then
+              if roce = '1' then
                 v.txMaster.tData(71 downto 64) := (others => '0');
                 v.txMaster.tData(79 downto 72) := (others => '0');
               else
@@ -640,7 +647,6 @@ begin
     -- Registered Outputs
     sMaster  <= r.sMaster;
     txMaster <= r.txMaster;
-    isRoCE   <= r.roce;
 
   end process comb;
 
@@ -687,7 +693,7 @@ begin
       SYNTH_MODE_G    => SYNTH_MODE_G,
       MEMORY_TYPE_G   => "distributed",
       FWFT_EN_G       => true,
-      DATA_WIDTH_G    => 69,
+      DATA_WIDTH_G    => 70,
       ADDR_WIDTH_G    => 4,
       FULL_THRES_G    => 8)
     port map (
@@ -695,6 +701,7 @@ begin
       wr_clk             => ethClk,
       --Write Ports (wr_clk domain)
       wr_en              => r.calc(0).step(EMAC_CSUM_PIPELINE_C),
+      din(69)            => r.roce(EMAC_CSUM_PIPELINE_C+1),
       din(68)            => r.fragDet(EMAC_CSUM_PIPELINE_C+1),
       din(67)            => r.eofeDet(EMAC_CSUM_PIPELINE_C+1),
       din(66)            => r.ipv4Det(EMAC_CSUM_PIPELINE_C+1),
@@ -708,6 +715,7 @@ begin
       --Read Ports (rd_clk domain)
       rd_clk             => ethClk,
       rd_en              => r.tranRd,
+      dout(69)           => roce,
       dout(68)           => fragDet,
       dout(67)           => eofeDet,
       dout(66)           => ipv4Det,
