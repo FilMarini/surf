@@ -97,6 +97,8 @@ architecture mapping of EthMacRx is
   signal csumMasterRoCE     : AxiStreamMasterType;
   signal csumMasterDly      : AxiStreamMasterType;
   signal csumSlaveDly       : AxiStreamSlaveType;
+  signal csumDmMasters      : AxiStreamMasterArray(1 downto 0);
+  signal csumDmSlaves       : AxiStreamSlaveArray(1 downto 0);
   signal csumMastersRoCE    : AxiStreamMasterArray(1 downto 0);
   signal csumSlavesRoCE     : AxiStreamSlaveArray(1 downto 0);
   signal csumMasterUdp      : AxiStreamMasterType;
@@ -113,8 +115,8 @@ architecture mapping of EthMacRx is
   signal RoceMaster         : AxiStreamMasterType;
   signal RoceSlave          : AxiStreamSlaveType;
   signal RoceCtrl           : AxiStreamCtrlType;
-  signal RoceMasterPkt      : AxiStreamMasterType;
-  signal RoceSlavePkt       : AxiStreamSlaveType;
+  signal roceMasters        : AxiStreamMasterArray(1 downto 0);
+  signal roceSlaves         : AxiStreamSlaveArray(1 downto 0);
 
 begin
 
@@ -187,7 +189,6 @@ begin
       ipCsumEn    => ethConfig.ipCsumEn,
       tcpCsumEn   => ethConfig.tcpCsumEn,
       udpCsumEn   => ethConfig.udpCsumEn,
-      isRoCE      => isRoCE,
       -- Outbound data to MAC
       sAxisMaster => pauseMaster,
       mAxisMaster => csumMaster);
@@ -225,17 +226,20 @@ begin
   ----------------------------------------------------------------------------
   -- RoCE iCRC check
   ----------------------------------------------------------------------------
-  p_RoCE_switch : process (RoceMasterPkt, csumMaster, isRoCE) is
-  begin  -- process p_RoCE_switch
-    if isRoCE = '1' then
-      -- Input connection
-      csumMasterRoCE <= csumMaster;
-      -- Output connection
-      csumMasterUdp  <= RoceMasterPkt;
-    else
-      csumMasterUdp <= csumMaster;
-    end if;
-  end process p_RoCE_switch;
+  U_DeMux : entity surf.AxiStreamDeMux
+    generic map (
+      TPD_G         => TPD_G,
+      NUM_MASTERS_G => 2,
+      MODE_G        => "INDEXED",
+      TDEST_HIGH_G  => 1,
+      TDEST_LOW_G   => 0)
+    port map (
+      axisClk      => ethClk,
+      axisRst      => ethRst,
+      sAxisMaster  => csumMaster,
+      sAxisSlave   => open,
+      mAxisMasters => csumDmMasters,
+      mAxisSlaves  => csumDmSlaves);
 
   -- double the stream
   U_Repeater : entity surf.AxiStreamRepeater
@@ -245,8 +249,8 @@ begin
     port map (
       axisClk      => ethClk,
       axisRst      => ethRst,
-      sAxisMaster  => csumMasterRoce,
-      sAxisSlave   => open,
+      sAxisMaster  => csumDmMasters(1),
+      sAxisSlave   => csumDmSlaves(1),
       mAxisMasters => csumMastersRoCE,
       mAxisSlaves  => csumSlavesRoCE);
 
@@ -276,7 +280,7 @@ begin
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       sAxisMaster => csumMasterDly,
       sAxisSlave  => csumSlaveDly,
       mAxisMaster => axisMasterNoTrail,
@@ -290,7 +294,7 @@ begin
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       sAxisMaster => csumMastersRoCE(0),
       sAxisSlave  => csumSlavesRoCE(0),
       mAxisMaster => csumiCrcMaster,
@@ -306,7 +310,7 @@ begin
       axisRst     => ethRst,
       sAxisMaster => csumiCrcMaster,
       sAxisSlave  => csumiCrcSlave,
-      isRoCE      => isRoCE,
+      isRoCE      => '1',
       mAxisMaster => readyForiCrcMaster,
       mAxisSlave  => readyForiCrcSlave);
 
@@ -328,7 +332,7 @@ begin
     port map (
       ethClk              => ethClk,
       ethRst              => ethRst,
-      isRoCE              => isRoCE,
+      isRoCE              => '1',
       sAxisMaster         => axisMasterNoTrail,
       sAxisSlave          => axisSlaveNoTrail,
       sAxisCrcCheckMaster => crcStreamMaster,
@@ -352,7 +356,11 @@ begin
       mAxisMaster => RoceMaster,
       mAxisCtrl   => RoceCtrl);
 
-  U_FifoPacketizer : entity surf.AxiStreamFifoV2
+
+  --------------------
+  -- Packetizer FIFOs
+  --------------------
+  U_FifoPacketizer_Roce : entity surf.AxiStreamFifoV2
     generic map (
       TPD_G               => TPD_G,
       VALID_THOLD_G       => 0,
@@ -368,10 +376,46 @@ begin
       sAxisCtrl   => RoceCtrl,
       mAxisClk    => ethClk,
       mAxisRst    => ethRst,
-      mAxisMaster => RoceMasterPkt,
-      -- mAxisSlave  => RoceSlavePkt
-      mAxisSlave  => AXI_STREAM_SLAVE_FORCE_C
-      );
+      mAxisMaster => RoceMasters(1),
+      mAxisSlave  => RoceSlaves(1));
+
+  U_FifoPacketizer_Udp : entity surf.AxiStreamFifoV2
+    generic map (
+      TPD_G               => TPD_G,
+      VALID_THOLD_G       => 0,
+      -- VALID_BURST_MODE_G     => VALID_BURST_MODE_G,
+      GEN_SYNC_FIFO_G     => true,
+      -- FIFO_ADDR_WIDTH_G      => FIFO_ADDR_WIDTH_G,
+      SLAVE_AXI_CONFIG_G  => PRIM_CONFIG_G,
+      MASTER_AXI_CONFIG_G => PRIM_CONFIG_G)
+    port map (
+      sAxisClk    => ethClk,
+      sAxisRst    => ethRst,
+      sAxisMaster => csumDmMasters(0),
+      sAxisSlave  => csumDmSlaves(0),
+      mAxisClk    => ethClk,
+      mAxisRst    => ethRst,
+      mAxisMaster => roceMasters(0),
+      mAxisSlave  => roceSlaves(0));
+
+  -----------------------
+  -- RoCE - Normal MUX
+  -----------------------
+  AxiStreamMux_1 : entity surf.AxiStreamMux
+    generic map (
+      TPD_G                => TPD_G,
+      NUM_SLAVES_G         => 2,
+      ILEAVE_EN_G          => true,
+      ILEAVE_ON_NOTVALID_G => true,
+      MODE_G               => "PASSTHROUGH",
+      TID_MODE_G           => "PASSTHROUGH")
+    port map (
+      axisClk      => ethClk,
+      axisRst      => ethRst,
+      sAxisMasters => roceMasters,
+      sAxisSlaves  => roceSlaves,
+      mAxisMaster  => csumMasterUdp,
+      mAxisSlave   => AXI_STREAM_SLAVE_FORCE_C);
 
   -------------------
   -- RX Bypass Module
