@@ -280,7 +280,6 @@ begin
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
-      isRoCE      => '1',
       sAxisMaster => csumMasterDly,
       sAxisSlave  => csumSlaveDly,
       mAxisMaster => axisMasterNoTrail,
@@ -294,7 +293,6 @@ begin
     port map (
       axisClk     => ethClk,
       axisRst     => ethRst,
-      isRoCE      => '1',
       sAxisMaster => csumMastersRoCE(0),
       sAxisSlave  => csumSlavesRoCE(0),
       mAxisMaster => csumiCrcMaster,
@@ -310,7 +308,6 @@ begin
       axisRst     => ethRst,
       sAxisMaster => csumiCrcMaster,
       sAxisSlave  => csumiCrcSlave,
-      isRoCE      => '1',
       mAxisMaster => readyForiCrcMaster,
       mAxisSlave  => readyForiCrcSlave);
 
@@ -332,7 +329,6 @@ begin
     port map (
       ethClk              => ethClk,
       ethRst              => ethRst,
-      isRoCE              => '1',
       sAxisMaster         => axisMasterNoTrail,
       sAxisSlave          => axisSlaveNoTrail,
       sAxisCrcCheckMaster => crcStreamMaster,

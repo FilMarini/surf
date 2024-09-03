@@ -32,7 +32,6 @@ entity EthMacRxCheckICrc is
   port (
     ethClk              : in  sl;
     ethRst              : in  sl;
-    isRoCE              : in  sl;
     sAxisMaster         : in  AxiStreamMasterType;
     sAxisSlave          : out AxiStreamSlaveType;
     sAxisCrcCheckMaster : in  AxiStreamMasterType;
@@ -117,7 +116,7 @@ begin  -- architecture rtl
     if (RST_ASYNC_G) and (ethRst = '1') then
       r <= REG_INIT_C after TPD_G;
     elsif (rising_edge(ethClk)) then
-      if ((RST_ASYNC_G = false) and (ethRst = '1')) or (isRoCE = '0') then
+      if (RST_ASYNC_G = false) and (ethRst = '1') then
         r <= REG_INIT_C after TPD_G;
       else
         r <= rin after TPD_G;

@@ -6,7 +6,7 @@
 -- Author     : Filippo Marini  <filippo.marini@pd.infn.it>
 -- Company    : INFN Padova
 -- Created    : 2024-06-20
--- Last update: 2024-06-21
+-- Last update: 2024-09-03
 -- Platform   : 
 -- Standard   : VHDL'93/02
 -------------------------------------------------------------------------------
@@ -38,8 +38,6 @@ entity AxiStreamPrepareForICrc is
   port (
     axisClk     : in  sl;
     axisRst     : in  sl;
-    -- RoCE transmission?
-    isRoCE      : in  sl;
     -- Slave ports
     sAxisMaster : in  AxiStreamMasterType;
     sAxisSlave  : out AxiStreamSlaveType;
@@ -132,7 +130,7 @@ begin  -- architecture rtl
     if (RST_ASYNC_G) and (axisRst = '1') then
       r <= REG_INIT_C after TPD_G;
     elsif (rising_edge(axisClk)) then
-      if ((RST_ASYNC_G = false) and (axisRst = '1')) or (isRoCE = '0') then
+      if (RST_ASYNC_G = false) and (axisRst = '1') then
         r <= REG_INIT_C after TPD_G;
       else
         r <= rin after TPD_G;
