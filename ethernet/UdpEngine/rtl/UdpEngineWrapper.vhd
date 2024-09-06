@@ -135,6 +135,7 @@ begin
          CLK_FREQ_G      => CLK_FREQ_G,
          IGMP_G          => IGMP_G,
          IGMP_GRP_SIZE   => IGMP_GRP_SIZE,
+         TTL_G           => TTL_G,
          VLAN_G          => VLAN_G)
       port map (
          -- Local Configurations
