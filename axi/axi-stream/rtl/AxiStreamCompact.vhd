@@ -32,6 +32,7 @@ entity AxiStreamCompact is
     SLAVE_AXI_CONFIG_G  : AxiStreamConfigType;
     MASTER_AXI_CONFIG_G : AxiStreamConfigType);
   port (
+      -- Clock and Reset
     axisClk     : in  sl;
     axisRst     : in  sl;
     -- Slave Port
@@ -96,7 +97,7 @@ architecture rtl of AxiStreamCompact is
     tLastDet    => false,
     tLastOnNext => false,
     tUserSet    => false,
-    fullBus     => false,
+    fullBus     => false
     );
 
   signal r   : RegType := REG_INIT_C;
@@ -111,7 +112,7 @@ begin  -- architecture rtl
   assert (MST_BYTES_C >= SLV_BYTES_C)
     report "Master data widths must be greater or equal than slave" severity failure;
 
-  comb : process (pipeAxisSlave, r, sAxisMaster) is
+   comb : process (axisRst, pipeAxisSlave, r, sAxisMaster) is
     variable v          : RegType;
     variable tKeepMin   : natural;
     variable tKeepWidth : natural;
@@ -224,6 +225,12 @@ begin  -- architecture rtl
     pipeAxisMaster.tUser                                                     <= r.obMaster.tUser;
     pipeAxisMaster.tLast                                                     <= r.obMaster.tLast;
 
+      -- Reset
+      if (RST_ASYNC_G = false and axisRst = '1') then
+         v := REG_INIT_C;
+      end if;
+
+      -- Register the variable for next clock cycle
     rin <= v;
 
 
@@ -233,12 +240,8 @@ begin  -- architecture rtl
   begin
     if (RST_ASYNC_G) and (axisRst = '1') then
       r <= REG_INIT_C after TPD_G;
-    elsif (rising_edge(axisClk)) then
-      if (RST_ASYNC_G = false) and (axisRst = '1') then
-        r <= REG_INIT_C after TPD_G;
-      else
+      elsif rising_edge(axisClk) then
         r <= rin after TPD_G;
-      end if;
     end if;
   end process seq;
 
