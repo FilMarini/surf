@@ -27,6 +27,7 @@ use surf.AxiStreamPkg.all;
 entity AxiStreamMux is
    generic (
       TPD_G                : time                    := 1 ns;
+      RST_POLARITY_G       : sl                      := '1';    -- '1' for active HIGH reset, '0' for active LOW reset
       RST_ASYNC_G          : boolean                 := false;
       PIPE_STAGES_G        : integer range 0 to 16   := 0;
       NUM_SLAVES_G         : integer range 1 to 256  := 4;
@@ -43,6 +44,10 @@ entity AxiStreamMux is
       TID_MODE_G           : string                  := "PASSTHROUGH";
       -- In ROUTED mode, an array mapping how TID should be assigned for each slave port
       TID_ROUTES_G         : Slv8Array               := (0 => "--------");
+      -- Assign a priority for each input stream index.
+      -- Higher priority streams will be selected over those with lower priority of both are active.
+      -- Format is (index => priority)
+      -- Leave unchanged for equal priority round-robbin
       PRIORITY_G           : IntegerArray            := (0 => 0);
       -- In INDEXED mode, assign slave index to TDEST at this bit offset
       TDEST_LOW_G          : integer range 0 to 7    := 0;
@@ -304,7 +309,7 @@ begin
       sAxisSlaves <= v.slaves;
 
       -- Reset
-      if (RST_ASYNC_G = false and axisRst = '1') then
+      if (RST_ASYNC_G = false and axisRst = RST_POLARITY_G) then
          v := REG_INIT_C;
       end if;
 
@@ -318,7 +323,7 @@ begin
 
    seq : process (axisClk, axisRst) is
    begin
-      if (RST_ASYNC_G) and (axisRst = '1') then
+      if (RST_ASYNC_G) and (axisRst = RST_POLARITY_G) then
          r <= REG_INIT_C after TPD_G;
       elsif rising_edge(axisClk) then
          r <= rin after TPD_G;
@@ -328,9 +333,10 @@ begin
    -- Optional output pipeline registers to ease timing
    AxiStreamPipeline_1 : entity surf.AxiStreamPipeline
       generic map (
-         TPD_G         => TPD_G,
-         RST_ASYNC_G   => RST_ASYNC_G,
-         PIPE_STAGES_G => PIPE_STAGES_G)
+         TPD_G          => TPD_G,
+         RST_POLARITY_G => RST_POLARITY_G,
+         RST_ASYNC_G    => RST_ASYNC_G,
+         PIPE_STAGES_G  => PIPE_STAGES_G)
       port map (
          axisClk     => axisClk,
          axisRst     => axisRst,

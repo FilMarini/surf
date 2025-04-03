@@ -31,7 +31,9 @@ entity XauiGtyUltraScaleWrapper is
       TPD_G             : time                := 1 ns;
       EN_WDT_G          : boolean             := false;
       STABLE_CLK_FREQ_G : real                := 156.25E+6;  -- Support 156.25MHz or 312.5MHz
+      JUMBO_G           : boolean             := true;
       PAUSE_EN_G        : boolean             := true;
+      ROCEV2_EN_G       : boolean             := false;
       -- AXI-Lite Configurations
       EN_AXI_REG_G      : boolean             := false;
       -- AXI Streaming Configurations
@@ -68,6 +70,7 @@ entity XauiGtyUltraScaleWrapper is
       -- MGT Clock Port (156.25MHz or 312.5MHz)
       gtClkP             : in  sl;
       gtClkN             : in  sl;
+      gtClkOut           : out  sl;
       -- MGT Ports
       gtTxP              : out slv(3 downto 0);
       gtTxN              : out slv(3 downto 0);
@@ -86,6 +89,7 @@ architecture mapping of XauiGtyUltraScaleWrapper is
 begin
 
    phyReady <= linkUp;
+   gtClkOut <= refClk;
 
    U_refClk : IBUFDS_GTE4
       port map (
@@ -134,7 +138,9 @@ begin
    XauiGtyUltraScale_Inst : entity surf.XauiGtyUltraScale
       generic map (
          TPD_G           => TPD_G,
+         JUMBO_G         => JUMBO_G,
          PAUSE_EN_G      => PAUSE_EN_G,
+         ROCEV2_EN_G     => ROCEV2_EN_G,
          -- AXI-Lite Configurations
          EN_AXI_REG_G    => EN_AXI_REG_G,
          -- AXI Streaming Configurations

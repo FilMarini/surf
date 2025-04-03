@@ -31,7 +31,9 @@ entity GigEthGtp7Wrapper is
       TPD_G              : time                 := 1 ns;
       SIMULATION_G       : boolean              := false;
       NUM_LANE_G         : natural range 1 to 4 := 1;
+      JUMBO_G            : boolean              := true;
       PAUSE_EN_G         : boolean              := true;
+      ROCEV2_EN_G        : boolean              := false;
       -- Clocking Configurations
       USE_GTREFCLK_G     : boolean              := false;
       --  FALSE: gtClkP/N,  TRUE: gtRefClk
@@ -221,7 +223,9 @@ begin
          U_GigEthGtp7 : entity surf.GigEthGtp7
             generic map (
                TPD_G           => TPD_G,
+               JUMBO_G         => JUMBO_G,
                PAUSE_EN_G      => PAUSE_EN_G,
+               ROCEV2_EN_G     => ROCEV2_EN_G,
                -- AXI-Lite Configurations
                EN_AXI_REG_G    => EN_AXI_REG_G,
                -- AXI Streaming Configurations

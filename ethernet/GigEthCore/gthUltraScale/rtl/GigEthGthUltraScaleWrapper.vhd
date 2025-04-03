@@ -31,7 +31,9 @@ entity GigEthGthUltraScaleWrapper is
    generic (
       TPD_G              : time                             := 1 ns;
       NUM_LANE_G         : natural range 1 to 4             := 1;
+      JUMBO_G            : boolean                          := true;
       PAUSE_EN_G         : boolean                          := true;
+      ROCEV2_EN_G        : boolean                          := false;
       -- Clocking Configurations
       EXT_PLL_G          : boolean                          := false;
       USE_GTREFCLK_G     : boolean                          := false;  --  FALSE: gtClkP/N,  TRUE: gtRefClk
@@ -193,7 +195,9 @@ begin
       U_GigEthGthUltraScale : entity surf.GigEthGthUltraScale
          generic map (
             TPD_G         => TPD_G,
+            JUMBO_G       => JUMBO_G,
             PAUSE_EN_G    => PAUSE_EN_G,
+            ROCEV2_EN_G   => ROCEV2_EN_G,
             -- AXI-Lite Configurations
             EN_AXI_REG_G  => EN_AXI_REG_G,
             -- AXI Streaming Configurations
