@@ -150,6 +150,11 @@ architecture rtl of Jesd204bTx is
    signal s_muxOutSelArr : Slv3Array(L_G-1 downto 0);
    signal s_jesdGtTxArr  : jesdGtTxLaneTypeArray(L_G-1 downto 0);
 
+   -- ID
+   signal s_did : slv(7 downto 0);
+   signal s_bid : slv(3 downto 0);
+   signal s_lid : slv(4 downto 0);
+
 begin
 
    ----------------------
@@ -329,10 +334,14 @@ begin
          generic map (
             TPD_G => TPD_G,
             F_G   => F_G,
-            K_G   => K_G)
+            K_G   => K_G,
+            L_G   => L_G)
          port map (
             devClk_i     => devClk_i,
             devRst_i     => devRst_i,
+            did_i        => s_did,             -- From AXI lite
+            bid_i        => s_bid,             -- From AXI lite
+            lid_i        => s_lid,             -- From AXI lite
             subClass_i   => s_subClass,        -- From AXI lite
             enable_i     => s_enableTx(i),     -- From AXI lite
             replEnable_i => s_replEnable,      -- From AXI lite

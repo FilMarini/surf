@@ -64,6 +64,9 @@ entity JesdTxReg is
       gtReset_o      : out sl;
       clearErr_o     : out sl;
       invertSync_o   : out sl;
+      did_o          : out slv(7 downto 0);
+      bid_o          : out slv(3 downto 0);
+      lid_o          : out slv(4 downto 0);
 
       posAmplitude_o : out slv(F_G*8-1 downto 0);
       negAmplitude_o : out slv(F_G*8-1 downto 0);
@@ -95,6 +98,9 @@ architecture rtl of JesdTxReg is
       txPowerDown     : slv(L_G-1 downto 0);
       txPolarity      : slv(L_G-1 downto 0);
       loopback        : slv(L_G-1 downto 0);
+      did             : slv(7 downto 0);
+      bid             : slv(3 downto 0);
+      lid             : slv(4 downto 0);
       -- AXI lite
       axilReadSlave   : AxiLiteReadSlaveType;
       axilWriteSlave  : AxiLiteWriteSlaveType;
@@ -153,6 +159,9 @@ architecture rtl of JesdTxReg is
    signal enableTestSig : sl;
    signal posAmplitude  : slv(F_G*8-1 downto 0);
    signal negAmplitude  : slv(F_G*8-1 downto 0);
+   signal did           : slv(7 downto 0);
+   signal bid           : slv(3 downto 0);
+   signal lid           : slv(4 downto 0);
 
    signal sysRefPeriodmin : slv(15 downto 0);
    signal sysRefPeriodmax : slv(15 downto 0);
@@ -256,6 +265,12 @@ begin
                      v.txPreCursor(i)  := axilWriteMaster.wdata(23 downto 16);
                   end if;
                end loop;
+            when 16#A0# =>              -- ADDR (0x280)
+               v.did := axilWriteMaster.wdata(7 downto 0);
+            when 16#A1# =>              -- ADDR (0x284)
+               v.bid := axilWriteMaster.wdata(3 downto 0);
+            when 16#A2# =>              -- ADDR (0x288)
+               v.lid := axilWriteMaster.wdata(4 downto 0);
             when others =>
                axilWriteResp := AXI_RESP_DECERR_C;
          end case;
@@ -608,6 +623,66 @@ begin
          clk    => devClk_i,
          rstIn  => invertData,
          rstOut => invertData_o);
+
+   ------------------------------------------------------------
+
+   U_did : entity surf.SynchronizerVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 8)
+      port map (
+         clk     => devClk_i,
+         dataIn  => r.did,
+         dataOut => did);
+
+   U_invertData_Pipeline : entity surf.RstPipelineVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 8)
+      port map (
+         clk    => devClk_i,
+         rstIn  => did,
+         rstOut => did_o);
+
+   ------------------------------------------------------------
+
+   U_bid : entity surf.SynchronizerVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 4)
+      port map (
+         clk     => devClk_i,
+         dataIn  => r.bid,
+         dataOut => bid);
+
+   U_invertData_Pipeline : entity surf.RstPipelineVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 4)
+      port map (
+         clk    => devClk_i,
+         rstIn  => bid,
+         rstOut => bid_o);
+
+   ------------------------------------------------------------
+
+   U_lid : entity surf.SynchronizerVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 5)
+      port map (
+         clk     => devClk_i,
+         dataIn  => r.lid,
+         dataOut => lid);
+
+   U_invertData_Pipeline : entity surf.RstPipelineVector
+      generic map (
+         TPD_G   => TPD_G,
+         WIDTH_G => 5)
+      port map (
+         clk    => devClk_i,
+         rstIn  => lid,
+         rstOut => lid_o);
 
    ------------------------------------------------------------
 

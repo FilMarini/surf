@@ -27,7 +27,7 @@ entity JesdIlasGen is
       TPD_G : time                   := 1 ns;
       F_G   : positive               := 2;
       K_G   : positive               := 32;
-      L_G   : positive range 1 to 32 := 2);
+      L_G   : positive range 1 to 32 := 1);
    port (
       clk : in sl;
       rst : in sl;

@@ -44,14 +44,20 @@ use surf.Jesd204bPkg.all;
 
 entity JesdTxLane is
    generic (
-      TPD_G : time     := 1 ns;
-      F_G   : positive := 2;
-      K_G   : positive := 32);
+      TPD_G : time                   := 1 ns;
+      F_G   : positive               := 2;
+      K_G   : positive               := 32;
+      L_G   : positive range 1 to 32 := 1);
    port (
       -- JESD
       -- Clocks and Resets
       devClk_i : in sl;
       devRst_i : in sl;
+
+      -- IDs
+      did_i : in slv(7 downto 0);
+      bid_i : in slv(3 downto 0);
+      lid_i : in slv(4 downto 0);
 
       -- JESD subclass selection: '0' or '1'(default)
       subClass_i : in sl;
@@ -134,15 +140,22 @@ begin
    ilasGen_INST : entity surf.JesdIlasGen
       generic map (
          TPD_G => TPD_G,
+         K_G   => K_G,
+         L_G   => L_G,
          F_G   => F_G)
       port map (
-         clk        => devClk_i,
-         rst        => devRst_i,
-         enable_i   => enable_i,
-         ilas_i     => s_ila,
-         lmfc_i     => lmfc_i,
-         ilasData_o => s_ilaDataMux,
-         ilasK_o    => s_ilaKMux);
+         clk         => devClk_i,
+         rst         => devRst_i,
+         enable_i    => enable_i,
+         ilas_i      => s_ila,
+         lmfc_i      => lmfc_i,
+         did_i       => did_i,
+         bid_i       => bid_i,
+         lid_i       => lid_i,
+         scrEnable_i => scrEnable_i,
+         subClass_i  => subClass_i,
+         ilasData_o  => s_ilaDataMux,
+         ilasK_o     => s_ilaKMux);
 
    ----------------------------------------------------
    -- Sample data with added synchronization characters TODO
@@ -168,15 +181,15 @@ begin
 
    with s_data_sel select
       r_jesdGtTx.dataK <= s_commaKMux when "00",
-      s_ilaKMux                       when "01",
-      s_sampleKMux                    when "10",
-      s_commaKMux                     when others;
+                          s_ilaKMux    when "01",
+                          s_sampleKMux when "10",
+                          s_commaKMux  when others;
 
    with s_data_sel select
       r_jesdGtTx.data <= s_commaDataMux when "00",
-      s_ilaDataMux                      when "01",
-      s_sampleDataMux                   when "10",
-      s_commaDataMux                    when others;
+                         s_ilaDataMux    when "01",
+                         s_sampleDataMux when "10",
+                         s_commaDataMux  when others;
 
    -- Output assignment
    status_o   <= s_refDetected & enable_i & nSync_i & s_ila & s_dataValid & gtTxReady_i;
