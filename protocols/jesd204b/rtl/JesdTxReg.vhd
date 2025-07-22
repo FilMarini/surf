@@ -335,6 +335,12 @@ begin
                      v.axilReadSlave.rdata(23 downto 16) := r.txPreCursor(i);
                   end if;
                end loop;
+            when 16#A0# =>              -- ADDR (0x280)
+               v.axilReadSlave.rdata(7 downto 0)  := r.did;
+            when 16#A1# =>              -- ADDR (0x284)
+               v.axilReadSlave.rdata(3 downto 0)  := r.bid;
+            when 16#A2# =>              -- ADDR (0x288)
+               v.axilReadSlave.rdata(4 downto 0)  := r.lid;
             when others =>
                axilReadResp := AXI_RESP_DECERR_C;
          end case;
