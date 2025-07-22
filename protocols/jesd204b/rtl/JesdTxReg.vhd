@@ -127,6 +127,9 @@ architecture rtl of JesdTxReg is
       txPowerDown  => (others => '0'),
       txPolarity   => (others => '0'),
       loopback     => (others => '0'),
+      did          => (others => '0'),
+      bid          => (others => '0'),
+      lid          => (others => '0'),
 
       axilReadSlave  => AXI_LITE_READ_SLAVE_INIT_C,
       axilWriteSlave => AXI_LITE_WRITE_SLAVE_INIT_C);
@@ -635,7 +638,7 @@ begin
          dataIn  => r.did,
          dataOut => did);
 
-   U_invertData_Pipeline : entity surf.RstPipelineVector
+   U_did_Pipeline : entity surf.RstPipelineVector
       generic map (
          TPD_G   => TPD_G,
          WIDTH_G => 8)
@@ -655,7 +658,7 @@ begin
          dataIn  => r.bid,
          dataOut => bid);
 
-   U_invertData_Pipeline : entity surf.RstPipelineVector
+   U_bid_Pipeline : entity surf.RstPipelineVector
       generic map (
          TPD_G   => TPD_G,
          WIDTH_G => 4)
@@ -675,7 +678,7 @@ begin
          dataIn  => r.lid,
          dataOut => lid);
 
-   U_invertData_Pipeline : entity surf.RstPipelineVector
+   U_lid_Pipeline : entity surf.RstPipelineVector
       generic map (
          TPD_G   => TPD_G,
          WIDTH_G => 5)
