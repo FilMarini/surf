@@ -358,7 +358,7 @@ class JesdTx(pr.Device):
             self.add(pr.RemoteVariable(
                 name         = "DeviceID",
                 description  = "Identifies the transmitting device.",
-                offset       =  0x280,
+                offset       =  0x2C4,
                 bitSize      =  8,
                 bitOffset    =  0x00,
                 mode         = "RW",
@@ -367,7 +367,7 @@ class JesdTx(pr.Device):
             self.add(pr.RemoteVariable(
                 name         = "BankID",
                 description  = "Identifies the bank within the device that the lane belongs to",
-                offset       =  0x284,
+                offset       =  0x2C0,
                 bitSize      =  4,
                 bitOffset    =  0x00,
                 mode         = "RW",
@@ -376,9 +376,9 @@ class JesdTx(pr.Device):
             self.add(pr.RemoteVariable(
                 name         = "LaneID",
                 description  = "Identifies the lane number within a bank and device.",
-                offset       =  0x288,
-                bitSize      =  5,
-                bitOffset    =  0x00,
+                offset       = range(0x280, 0x280*numTxLanes+1,4),
+                bitSize      = 5,
+                bitOffset    = 0x00,
                 mode         = "RW",
             ))
 
