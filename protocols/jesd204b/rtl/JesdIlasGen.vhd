@@ -42,9 +42,9 @@ entity JesdIlasGen is
       lmfc_i : in sl;
 
       -- ILA config data
-      did_i       : in slv(7 downto 0) := (others => '0');
-      bid_i       : in slv(3 downto 0) := (others => '0');
-      lid_i       : in slv(4 downto 0) := (others => '0');
+      did_i       : in slv(7 downto 0);
+      bid_i       : in slv(3 downto 0);
+      lid_i       : in slv(4 downto 0);
       scrEnable_i : in sl              := '0';
       subClass_i  : in sl              := '0';
 

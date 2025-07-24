@@ -373,14 +373,16 @@ class JesdTx(pr.Device):
                 mode         = "RW",
             ))
 
-            self.add(pr.RemoteVariable(
+            self.addRemoteVariables(
                 name         = "LaneID",
                 description  = "Identifies the lane number within a bank and device.",
-                offset       = range(0x280, 0x280*numTxLanes+1,4),
+                offset       = 0x280,
                 bitSize      = 5,
                 bitOffset    = 0x00,
                 mode         = "RW",
-            ))
+                number       = numTxLanes,
+                stride       = 4,
+            )
 
             ##############################
             # Commands
