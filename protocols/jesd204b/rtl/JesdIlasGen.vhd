@@ -165,7 +165,7 @@ begin
       v.ilaConfigOctets(12) := (others => '0');
 
       -- Checksum
-      vChecksum := did_i + bid_i + lid_i + PARTIAL_CHKSUM_C;
+      vChecksum := did_i + bid_i + lid_i + PARTIAL_CHKSUM_C + scrEnable_i + subClass_i;
       v.ilaConfigOctets(13) := vChecksum;
 
 
