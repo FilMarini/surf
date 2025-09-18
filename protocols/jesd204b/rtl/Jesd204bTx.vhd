@@ -153,7 +153,7 @@ architecture rtl of Jesd204bTx is
    -- ID
    signal s_did : slv(7 downto 0);
    signal s_bid : slv(3 downto 0);
-   signal s_lid : slv(4 downto 0);
+   signal s_lid : Slv5Array(L_G-1 downto 0);
 
 begin
 
@@ -344,7 +344,7 @@ begin
             devRst_i     => devRst_i,
             did_i        => s_did,             -- From AXI lite
             bid_i        => s_bid,             -- From AXI lite
-            lid_i        => s_lid,             -- From AXI lite
+            lid_i        => s_lid(i),          -- From AXI lite
             subClass_i   => s_subClass,        -- From AXI lite
             enable_i     => s_enableTx(i),     -- From AXI lite
             replEnable_i => s_replEnable,      -- From AXI lite
