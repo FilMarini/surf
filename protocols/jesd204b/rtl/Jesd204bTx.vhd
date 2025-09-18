@@ -217,6 +217,9 @@ begin
          rampStep_o      => s_rampStep,
          squarePeriod_o  => s_squarePeriod,
          invertSync_o    => s_invertSync,
+         did_o           => s_did,
+         bid_o           => s_bid,
+         lid_o           => s_lid,
          -- TX Configurable Driver Ports
          txDiffCtrl      => txDiffCtrl,
          txPostCursor    => txPostCursor,
