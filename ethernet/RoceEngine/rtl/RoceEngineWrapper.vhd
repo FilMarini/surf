@@ -6,7 +6,7 @@
 -- Author     : Filippo Marini  <filippo.marini@pd.infn.it>
 -- Company    : INFN Padova
 -- Created    : 2024-06-06
--- Last update: 2024-07-30
+-- Last update: 2026-03-11
 -- Platform   : 
 -- Standard   : VHDL'93/02
 -------------------------------------------------------------------------------
@@ -60,7 +60,9 @@ entity RoceEngineWrapper is
     dmaReadRespMaster   : in  RoceDmaReadRespMasterType;
     dmaReadRespSlave    : out RoceDmaReadRespSlaveType;
     dmaReadReqMaster    : out RoceDmaReadReqMasterType;
-    dmaReadReqSlave     : in  RoceDmaReadReqSlaveType
+    dmaReadReqSlave     : in  RoceDmaReadReqSlaveType;
+    -- CNP
+    cnp_received        : out sl
     );
 end RoceEngineWrapper;
 
@@ -132,7 +134,8 @@ architecture rtl of RoceEngineWrapper is
       s_dma_read_wr_id           : in  std_logic_vector(63 downto 0);
       s_dma_read_is_resp_err     : in  std_logic;
       s_dma_read_data_stream     : in  std_logic_vector(289 downto 0);
-      s_dma_read_ready           : out std_logic);
+      s_dma_read_ready           : out std_logic;
+      cnp_received               : out std_logic);
   end component mkAxiSTransportLayer;
 
   signal RoceRstN               : sl;
@@ -315,7 +318,8 @@ begin  -- architecture rtl
       s_dma_read_wr_id           => dmaReadRespMaster.wrId,
       s_dma_read_is_resp_err     => dmaReadRespMaster.isRespErr,
       s_dma_read_data_stream     => dmaReadRespMaster.dataStream,
-      s_dma_read_ready           => dmaReadRespSlave.ready
+      s_dma_read_ready           => dmaReadRespSlave.ready,
+      cnp_received               => cnp_received
       );
 
   -----------------------------------------------------------------------------
@@ -326,7 +330,7 @@ begin  -- architecture rtl
     s_axisMetaDataRespSlave <= AXI_STREAM_SLAVE_INIT_C;
   end generate ROCE_EXT_CONFIG_GEN;
 
-  ROCE_INT_CONFIG_GEN: if not EXT_ROCE_CONFIG_G generate
+  ROCE_INT_CONFIG_GEN : if not EXT_ROCE_CONFIG_G generate
     RoceConfigurator_1 : entity surf.RoceConfigurator
       generic map (
         TPD_G => TPD_G
