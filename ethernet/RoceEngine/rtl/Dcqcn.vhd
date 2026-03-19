@@ -270,9 +270,9 @@ begin  -- architecture rtl
     axiSlaveRegister(axilEp, x"010", 0, v.rateIncInterval);
     axiSlaveRegister(axilEp, x"014", 0, v.rateDecInterval);
     axiSlaveRegister(axilEp, x"014", 16, v.alphaUpdInterval);
-    axiSlaveRegister(axilEp, x"018", 0, v.Rc);  -- to change to Read only v->r
-    axiSlaveRegister(axilEp, x"01C", 0, v.Rt);  -- to change to Read only v->r
-    axiSlaveRegister(axilEp, x"020", 0, v.alpha);  -- to change to Read only v->r
+    axiSlaveRegisterR(axilEp, x"018", 0, r.Rc);
+    axiSlaveRegisterR(axilEp, x"01C", 0, r.Rt);
+    axiSlaveRegisterR(axilEp, x"020", 0, r.alpha);
     -- Closeout the transaction
     axiSlaveDefault(axilEp, v.axilWriteSlave, v.axilReadSlave, AXI_RESP_DECERR_C);
 
