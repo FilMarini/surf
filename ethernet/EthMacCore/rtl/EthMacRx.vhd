@@ -158,7 +158,8 @@ begin
       U_RoCEv2 : entity surf.EthMacRxRoCEv2
          generic map (
             TPD_G          => TPD_G,
-            RST_POLARITY_G => RST_POLARITY_G)
+            RST_POLARITY_G => RST_POLARITY_G,
+            JUMBO_G        => JUMBO_G)
          port map (
             -- Clock and Reset
             ethClk         => ethClk,

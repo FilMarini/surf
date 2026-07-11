@@ -24,8 +24,9 @@ use surf.EthMacPkg.all;
 
 entity EthMacRxRoCEv2 is
    generic (
-      TPD_G          : time := 1 ns;
-      RST_POLARITY_G : sl   := '1');  -- '1' for active HIGH reset, '0' for active LOW reset
+      TPD_G          : time    := 1 ns;
+      RST_POLARITY_G : sl      := '1';  -- '1' for active HIGH reset, '0' for active LOW reset
+      JUMBO_G        : boolean := true);
    port (
       -- Clock and Reset
       ethClk         : in  sl;
@@ -37,6 +38,19 @@ entity EthMacRxRoCEv2 is
 end EthMacRxRoCEv2;
 
 architecture mapping of EthMacRxRoCEv2 is
+
+   -- EthMacRxCheckICrc is store-and-forward: it releases no beat of a packet
+   -- until the CRC-result beat arrives, which the CRC engine only emits after
+   -- consuming the packet's LAST beat.  The delay FIFO must therefore hold a
+   -- full max-size frame; the upstream MAC RX path has no flow control (the
+   -- DeMux sAxisSlave is left open), so a full FIFO silently loses beats.
+   -- 16 bytes/beat: jumbo (9000B) needs ~564 beats, standard (1500B) ~95.
+   constant DLY_FIFO_ADDR_WIDTH_C : positive := ite(JUMBO_G, 10, 8);
+   -- The packetizer FIFO holds tValid until a frame completes (VALID_THOLD=0),
+   -- so its occupancy cannot drop while a frame is still streaming in.  If
+   -- pause asserts below one full frame, AxiStreamFlush stalls mid-frame and
+   -- the pipeline deadlocks: pause must stay above the max frame beat count.
+   constant PAUSE_THRESH_C : positive := ite(JUMBO_G, 896, 192);
 
    constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
       TSTRB_EN_C    => false,
@@ -112,13 +126,14 @@ begin
          mAxisMasters => csumMastersRoCE,
          mAxisSlaves  => csumSlavesRoCE);
 
-   -- FIFO the second stream to wait for iCrc
+   -- FIFO the second stream to wait for iCrc (must hold a full frame, see
+   -- DLY_FIFO_ADDR_WIDTH_C above)
    U_FifoV2 : entity surf.AxiStreamFifoV2
       generic map (
          TPD_G               => TPD_G,
          RST_POLARITY_G      => RST_POLARITY_G,
          GEN_SYNC_FIFO_G     => true,
-         FIFO_ADDR_WIDTH_G   => 5,
+         FIFO_ADDR_WIDTH_G   => DLY_FIFO_ADDR_WIDTH_C,
          SLAVE_AXI_CONFIG_G  => EMAC_AXIS_CONFIG_C,
          MASTER_AXI_CONFIG_G => EMAC_AXIS_CONFIG_C)
       port map (
@@ -220,7 +235,8 @@ begin
          RST_POLARITY_G      => RST_POLARITY_G,
          VALID_THOLD_G       => 0,
          GEN_SYNC_FIFO_G     => true,
-         FIFO_PAUSE_THRESH_G => (2**4),
+         FIFO_ADDR_WIDTH_G   => DLY_FIFO_ADDR_WIDTH_C,
+         FIFO_PAUSE_THRESH_G => PAUSE_THRESH_C,
          SLAVE_AXI_CONFIG_G  => EMAC_AXIS_CONFIG_C,
          MASTER_AXI_CONFIG_G => EMAC_AXIS_CONFIG_C)
       port map (
@@ -239,6 +255,7 @@ begin
          RST_POLARITY_G      => RST_POLARITY_G,
          VALID_THOLD_G       => 0,
          GEN_SYNC_FIFO_G     => true,
+         FIFO_ADDR_WIDTH_G   => DLY_FIFO_ADDR_WIDTH_C,
          SLAVE_AXI_CONFIG_G  => EMAC_AXIS_CONFIG_C,
          MASTER_AXI_CONFIG_G => EMAC_AXIS_CONFIG_C)
       port map (
