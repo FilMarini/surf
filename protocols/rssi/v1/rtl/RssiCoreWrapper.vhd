@@ -222,7 +222,11 @@ begin
          U_Packetizer : entity surf.AxiStreamPacketizer2
             generic map (
                TPD_G                => TPD_G,
-               MEMORY_TYPE_G        => "block",
+               -- "block" crashes forced-BRAM generation in Vivado 2021.1 and
+               -- 2024.1 (Synth 8-5797 + HARTGRamGenInfo.cxx assert) when this
+               -- design is flattened; the 256x49 single-ported context RAM is
+               -- fine as LUTRAM. See targets/kcu105/synth-bram-inference-issue.md
+               MEMORY_TYPE_G        => "distributed",
                REG_EN_G             => true,
                CRC_MODE_G           => "FULL",
                CRC_POLY_G           => x"04C11DB7",
@@ -326,7 +330,11 @@ begin
          U_Depacketizer : entity surf.AxiStreamDepacketizer2
             generic map (
                TPD_G                => TPD_G,
-               MEMORY_TYPE_G        => "block",
+               -- "block" crashes forced-BRAM generation in Vivado 2021.1 and
+               -- 2024.1 (Synth 8-5797 + HARTGRamGenInfo.cxx assert) when this
+               -- design is flattened; the 256x50 single-ported context RAM is
+               -- fine as LUTRAM. See targets/kcu105/synth-bram-inference-issue.md
+               MEMORY_TYPE_G        => "distributed",
                REG_EN_G             => true,
                CRC_MODE_G           => "FULL",
                CRC_POLY_G           => x"04C11DB7",

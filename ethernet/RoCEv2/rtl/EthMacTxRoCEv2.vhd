@@ -40,15 +40,6 @@ end EthMacTxRoCEv2;
 
 architecture mapping of EthMacTxRoCEv2 is
 
-   constant ROCE_CRC32CALC_AXI_CONFIG_C : AxiStreamConfigType := (
-      TSTRB_EN_C    => false,
-      TDATA_BYTES_C => 32,
-      TDEST_BITS_C  => 0,
-      TID_BITS_C    => 0,
-      TKEEP_MODE_C  => TKEEP_COMP_C,
-      TUSER_BITS_C  => 2,
-      TUSER_MODE_C  => TUSER_FIRST_LAST_C);
-
    constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
       TSTRB_EN_C    => false,
       TDATA_BYTES_C => 4,
@@ -69,9 +60,6 @@ architecture mapping of EthMacTxRoCEv2 is
 
    signal csumiCrcMaster : AxiStreamMasterType;
    signal csumiCrcSlave  : AxiStreamSlaveType;
-
-   signal readyForiCrcMaster : AxiStreamMasterType;
-   signal readyForiCrcSlave  : AxiStreamSlaveType;
 
    signal crcStreamMaster : AxiStreamMasterType;
    signal crcStreamSlave  : AxiStreamSlaveType;
@@ -150,29 +138,16 @@ begin
          mAxisMaster => csumiCrcMaster,
          mAxisSlave  => csumiCrcSlave);
 
-   U_Compact : entity surf.AxiStreamCompact
-      generic map (
-         TPD_G               => TPD_G,
-         RST_POLARITY_G      => RST_POLARITY_G,
-         SLAVE_AXI_CONFIG_G  => EMAC_AXIS_CONFIG_C,
-         MASTER_AXI_CONFIG_G => ROCE_CRC32CALC_AXI_CONFIG_C)
-      port map (
-         axisClk     => ethClk,
-         axisRst     => ethRst,
-         sAxisMaster => csumiCrcMaster,
-         sAxisSlave  => csumiCrcSlave,
-         mAxisMaster => readyForiCrcMaster,
-         mAxisSlave  => readyForiCrcSlave);
-
-   CrcAxiStreamWrapperSend_1 : entity surf.EthMacCrcAxiStreamWrapperSend
+   U_Crc : entity surf.EthMacCrcAxiStream
       generic map (
          TPD_G          => TPD_G,
-         RST_POLARITY_G => RST_POLARITY_G)
+         RST_POLARITY_G => RST_POLARITY_G,
+         CRC_MODE_G     => "SEND")
       port map (
          ethClk      => ethClk,
          ethRst      => ethRst,
-         sAxisMaster => readyForiCrcMaster,
-         sAxisSlave  => readyForiCrcSlave,
+         sAxisMaster => csumiCrcMaster,
+         sAxisSlave  => csumiCrcSlave,
          mAxisMaster => crcStreamMaster,
          mAxisSlave  => crcStreamSlave);
 

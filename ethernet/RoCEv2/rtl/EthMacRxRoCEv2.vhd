@@ -52,15 +52,6 @@ architecture mapping of EthMacRxRoCEv2 is
    -- the pipeline deadlocks: pause must stay above the max frame beat count.
    constant PAUSE_THRESH_C : positive := ite(JUMBO_G, 896, 192);
 
-   constant ROCE_CRC32_AXI_CONFIG_C : AxiStreamConfigType := (
-      TSTRB_EN_C    => false,
-      TDATA_BYTES_C => 32,
-      TDEST_BITS_C  => 8,
-      TID_BITS_C    => 0,
-      TKEEP_MODE_C  => TKEEP_COMP_C,
-      TUSER_BITS_C  => 4,
-      TUSER_MODE_C  => TUSER_FIRST_LAST_C);
-
    signal csumDmMasters : AxiStreamMasterArray(1 downto 0);
    signal csumDmSlaves  : AxiStreamSlaveArray(1 downto 0);
 
@@ -75,9 +66,6 @@ architecture mapping of EthMacRxRoCEv2 is
 
    signal csumiCrcMaster : AxiStreamMasterType;
    signal csumiCrcSlave  : AxiStreamSlaveType;
-
-   signal readyForiCrcMaster : AxiStreamMasterType;
-   signal readyForiCrcSlave  : AxiStreamSlaveType;
 
    signal crcStreamMaster : AxiStreamMasterType;
    signal crcStreamSlave  : AxiStreamSlaveType;
@@ -171,29 +159,16 @@ begin
          mAxisMaster => csumiCrcMaster,
          mAxisSlave  => csumiCrcSlave);
 
-   U_Compact : entity surf.AxiStreamCompact
-      generic map (
-         TPD_G               => TPD_G,
-         RST_POLARITY_G      => RST_POLARITY_G,
-         SLAVE_AXI_CONFIG_G  => EMAC_AXIS_CONFIG_C,
-         MASTER_AXI_CONFIG_G => ROCE_CRC32_AXI_CONFIG_C)
-      port map (
-         axisClk     => ethClk,
-         axisRst     => ethRst,
-         sAxisMaster => csumiCrcMaster,
-         sAxisSlave  => csumiCrcSlave,
-         mAxisMaster => readyForiCrcMaster,
-         mAxisSlave  => readyForiCrcSlave);
-
-   U_iCrcIn : entity surf.EthMacCrcAxiStreamWrapperRecv
+   U_iCrcIn : entity surf.EthMacCrcAxiStream
       generic map (
          TPD_G          => TPD_G,
-         RST_POLARITY_G => RST_POLARITY_G)
+         RST_POLARITY_G => RST_POLARITY_G,
+         CRC_MODE_G     => "RECV")
       port map (
          ethClk      => ethClk,
          ethRst      => ethRst,
-         sAxisMaster => readyForiCrcMaster,
-         sAxisSlave  => readyForiCrcSlave,
+         sAxisMaster => csumiCrcMaster,
+         sAxisSlave  => csumiCrcSlave,
          mAxisMaster => crcStreamMaster,
          mAxisSlave  => crcStreamSlave);
 

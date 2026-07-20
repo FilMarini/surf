@@ -51,7 +51,12 @@ class RoceMetaDataAxil(pr.Device):
             bitSize     = 1,
             bitOffset   = 0,
             base        = pr.UInt,
-            function    = pr.RemoteCommand.touchOne,
+            # toggle (1 then 0), NOT touchOne: GO shares the CONTROL word with
+            # ReqType. touchOne leaves the staged block bit at 1, so any later
+            # ReqType.set() block write would re-fire GO with the stale bank
+            # (double-issues every request; the duplicate QP CREATE then fails
+            # at MAX_QP_G=1). toggle stages the bit back to 0 after the strobe.
+            function    = pr.RemoteCommand.toggle,
         ))
 
         self.add(pr.RemoteVariable(
