@@ -29,6 +29,7 @@ entity Dcqcn is
       TPD_G          : time                := 1 ns;
       LINE_RATE_G    : integer             := 1_250_000_000;  -- 1.25 GB/s = 10 Gb/s
       CLK_FREQ_G     : real                := 156.25E+6;
+      BUCKET_SIZE_G  : slv(31 downto 0)    := x"00001000";  -- 4-KiB max burst credit
       AXIS_CONFIG_G  : AxiStreamConfigType := SSI_CONFIG_INIT_C;
       RST_ASYNC_G    : boolean             := false;
       RST_POLARITY_G : sl                  := '1'
@@ -233,6 +234,7 @@ begin  -- architecture rtl
          TPD_G         => TPD_G,
          CLK_FREQ_G    => CLK_FREQ_G,
          FRAC_BITS_G   => 16,
+         BUCKET_SIZE_G => BUCKET_SIZE_G,
          AXIS_CONFIG_G => AXIS_CONFIG_G)
       port map (
          axisClk     => axisClk,

@@ -135,6 +135,7 @@ architecture rtl of RoceEngineWrapper is
    signal recvReqInReady     : sl;
    signal dataStreamOutValid : sl;
    signal dataStreamOutData  : slv(ROCE_DATA_STREAM_W_C-1 downto 0);
+   signal dataStreamOutQp    : slv(7 downto 0);
    signal workCompRqValid    : sl;
    signal workCompRqData     : slv(ROCE_WORK_COMP_W_C-1 downto 0);
    signal workCompSqValid    : sl;
@@ -189,7 +190,7 @@ begin
    -- Wire stream TX: raw DataStream -> 32-byte RoCE beat -> 16-byte UDP beats
    ---------------------------------------------------------------------------
    dataStreamOut    <= SlvToDataStream(dataStreamOutValid, dataStreamOutData);
-   roceTxAxisMaster <= DataStreamToAxiStream(dataStreamOut);
+   roceTxAxisMaster <= DataStreamToAxiStream(dataStreamOut, dataStreamOutQp);
 
    U_TxResize : entity surf.AxiStreamResize
       generic map (
@@ -268,6 +269,7 @@ begin
          recvReqInReady     => recvReqInReady,
          dataStreamOutValid => dataStreamOutValid,
          dataStreamOutData  => dataStreamOutData,
+         dataStreamOutQp    => dataStreamOutQp,
          dataStreamOutRdEn  => roceTxAxisSlave.tReady,
          workCompRqValid    => workCompRqValid,
          workCompRqData     => workCompRqData,

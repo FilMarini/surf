@@ -20,10 +20,15 @@
 
 import pyrogue as pr
 
+from surf.ethernet.roce._Dcqcn import Dcqcn
+
 
 class RoceMetaDataAxil(pr.Device):
-    def __init__(self, **kwargs):
+    def __init__(self, numQp=0, clockPeriodNs=6.4, **kwargs):
         super().__init__(**kwargs)
+
+        if not 0 <= numQp <= 15:
+            raise ValueError('numQp must be in the range 0..15')
 
         ##############################
         # Control / status (0x000)
@@ -147,6 +152,18 @@ class RoceMetaDataAxil(pr.Device):
             base        = pr.UInt,
             mode        = 'RW',
         ))
+
+        # RoCEv2AxiStreamRdma places one independent DCQCN register bank per
+        # local QP after this metadata bank.  numQp=0 preserves the behavior of
+        # using RoceMetaDataAxil as a standalone metadata-only device.
+        for i in range(numQp):
+            self.add(Dcqcn(
+                name          = f'Dcqcn[{i}]',
+                description   = f'DCQCN reaction point for local QP index {i}',
+                offset        = (i + 1) * 0x1000,
+                clockPeriodNs = clockPeriodNs,
+                expand        = False,
+            ))
 
         ##############################
         # PD request bank (ReqPD, 0x100)

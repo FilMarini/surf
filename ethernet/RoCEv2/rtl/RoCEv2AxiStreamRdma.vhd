@@ -3,11 +3,14 @@
 -------------------------------------------------------------------------------
 -- Description: RoCEv2 engine + DCQCN congestion-control composing wrapper.
 --   Instantiates surf.RoceEngineWrapper (the RoCEv2 transport engine) and
---   surf.Dcqcn (DCQCN rate limiter). A 1->2 AXI-Lite crossbar fans the single
---   AXI-Lite slave to the engine's MetaData bank (slot 0, 0x0000) and the Dcqcn
---   register file (slot 1, 0x1000). The engine's per-QP CNP output is OR-reduced
---   into Dcqcn's scalar cnp; Dcqcn paces the wire-facing TX stream. DCQCN_EN_G
---   gates it end-to-end (bypass = stream passthrough, Dcqcn slot returns DECERR).
+--   surf.Dcqcn (DCQCN rate limiter). A 1->(1+MAX_QP_G) AXI-Lite crossbar fans the single
+--   AXI-Lite slave to the engine's MetaData bank (slot 0, 0x0000) and one Dcqcn
+--   register file per QP (QP i at slot i+1 / offset (i+1)*0x1000).  The engine
+--   tags every TX frame with its local QP index in tDest.  A stream demux sends
+--   each QP to an independent Dcqcn instance driven by cnpVec(i), then a
+--   frame-locked mux recombines the paced streams.  The internal tDest tag is
+--   cleared before the UDP-facing output.  DCQCN_EN_G gates the block end-to-end
+--   (bypass = stream passthrough and all Dcqcn slots return DECERR).
 --   Reuses the name of the pre-migration wrapper that bundled engine + DCQCN.
 -------------------------------------------------------------------------------
 -- This file is part of 'SLAC Firmware Standard Library'.
@@ -21,6 +24,7 @@
 
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 
 library surf;
 use surf.StdRtlPkg.all;
@@ -39,7 +43,8 @@ entity RoCEv2AxiStreamRdma is
       EN_TX_G          : boolean          := true;
       EN_RX_G          : boolean          := true;
       EN_READ_G        : boolean          := true;
-      DCQCN_EN_G       : boolean          := true;                    -- gate the DCQCN block (ONLY valid with MAX_QP_G=1; see assertion below)
+      DCQCN_EN_G       : boolean          := true;                    -- gate the per-QP DCQCN block
+      DCQCN_BUCKET_SIZE_G : slv(31 downto 0) := x"00004000";          -- per-QP max burst credit (16 KiB)
       AXIL_BASE_ADDR_G : slv(31 downto 0) := (others => '0'));  -- absolute AXI-Lite base of this window
    port (
       clk                 : in  sl;
@@ -69,23 +74,21 @@ entity RoCEv2AxiStreamRdma is
       mDmaWriteReqSlave   : in  RoceDmaWriteReqSlaveType;
       sDmaWriteRespMaster : in  RoceDmaWriteRespMasterType;
       sDmaWriteRespSlave  : out RoceDmaWriteRespSlaveType;
-      -- AXI-Lite (fanned to MetaData @0x0000 and DCQCN @0x1000)
+      -- AXI-Lite (MetaData @0x0000, DCQCN QP i @(i+1)*0x1000)
       axilReadMaster      : in  AxiLiteReadMasterType;
       axilReadSlave       : out AxiLiteReadSlaveType;
       axilWriteMaster     : in  AxiLiteWriteMasterType;
       axilWriteSlave      : out AxiLiteWriteSlaveType;
       -- metadata completion interrupt
       mdDoneIrq           : out sl;
-      -- per-QP CNP pulses from the engine (observation; also feeds the
-      -- internal Dcqcn when DCQCN_EN_G=true)
+      -- per-QP CNP pulses from the engine (observation and per-QP DCQCN input)
       cnp                 : out slv(MAX_QP_G-1 downto 0));
 end entity RoCEv2AxiStreamRdma;
 
 architecture rtl of RoCEv2AxiStreamRdma is
 
-   constant NUM_AXIL_C : positive := 2;
-   constant MD_C       : natural  := 0;   -- MetaData  @ base + 0x0000
-   constant DCQCN_C    : natural  := 1;   -- Dcqcn     @ base + 0x1000
+   constant NUM_AXIL_C : positive := 1 + MAX_QP_G;
+   constant MD_C       : natural  := 0;   -- MetaData @ base + 0x0000
    constant XBAR_CONFIG_C : AxiLiteCrossbarMasterConfigArray(NUM_AXIL_C-1 downto 0) :=
       genAxiLiteConfig(NUM_AXIL_C, AXIL_BASE_ADDR_G, 16, 12);
 
@@ -94,25 +97,54 @@ architecture rtl of RoCEv2AxiStreamRdma is
    signal axilReadMastersX  : AxiLiteReadMasterArray(NUM_AXIL_C-1 downto 0);
    signal axilReadSlavesX   : AxiLiteReadSlaveArray(NUM_AXIL_C-1 downto 0)  := (others => AXI_LITE_READ_SLAVE_EMPTY_SLVERR_C);
 
-   signal cnpVec        : slv(MAX_QP_G-1 downto 0);
-   signal cnpReceived   : sl;
+   signal cnpVec         : slv(MAX_QP_G-1 downto 0);
    signal engineTxMaster : AxiStreamMasterType;   -- engine TX -> Dcqcn ingress
    signal engineTxSlave  : AxiStreamSlaveType;
+   signal dcqcnInMasters  : AxiStreamMasterArray(MAX_QP_G-1 downto 0);
+   signal dcqcnInSlaves   : AxiStreamSlaveArray(MAX_QP_G-1 downto 0);
+   signal dcqcnOutMasters : AxiStreamMasterArray(MAX_QP_G-1 downto 0);
+   signal dcqcnOutSlaves  : AxiStreamSlaveArray(MAX_QP_G-1 downto 0);
+   signal dcqcnMuxMaster  : AxiStreamMasterType;
+   signal dcqcnMuxSlave   : AxiStreamSlaveType;
 
 begin
 
    cnp <= cnpVec;
 
-   ----------------------------------------------------------------------------
-   -- DCQCN uses ONE shared reaction point: a single Dcqcn on the merged egress
-   -- stream, driven by cnp = uOr of the per-QP CNP vector. That is only coherent
-   -- for a single flow, so DCQCN may be enabled ONLY when MAX_QP_G = 1. For
-   -- MAX_QP_G > 1 the instantiator MUST set DCQCN_EN_G => false.
-   -- (Elaboration-time check; fires in Questa/cocotb elaboration.)
-   ----------------------------------------------------------------------------
-   assert (not DCQCN_EN_G) or (MAX_QP_G = 1)
-      report "RoCEv2AxiStreamRdma: DCQCN_EN_G=true requires MAX_QP_G=1 (single " &
-             "shared DCQCN reaction point). Set DCQCN_EN_G=false for MAX_QP_G>1."
+   -- pragma translate_off
+   -- Integration invariant: the engine emits a valid local QP tag and holds
+   -- it for the complete accepted frame.  The demux routes every beat from
+   -- tDest, so changing it mid-frame would split one packet across QPs.
+   QP_TAG_ASSERT : process (clk) is
+      variable inFrame : boolean := false;
+      variable qpTag   : slv(7 downto 0) := (others => '0');
+   begin
+      if rising_edge(clk) then
+         if rst = RST_POLARITY_G then
+            inFrame := false;
+            qpTag   := (others => '0');
+         elsif (engineTxMaster.tValid = '1') and (engineTxSlave.tReady = '1') then
+            assert to_integer(unsigned(engineTxMaster.tDest)) < MAX_QP_G
+               report "RoCEv2AxiStreamRdma: out-of-range local QP tDest tag"
+               severity failure;
+            if inFrame then
+               assert engineTxMaster.tDest = qpTag
+                  report "RoCEv2AxiStreamRdma: local QP tDest changed mid-frame"
+                  severity failure;
+            else
+               qpTag := engineTxMaster.tDest;
+            end if;
+            inFrame := engineTxMaster.tLast = '0';
+         end if;
+      end if;
+   end process QP_TAG_ASSERT;
+   -- pragma translate_on
+
+   -- The wrapper reserves a 64-KiB AXI-Lite window split into 4-KiB slots:
+   -- one metadata slot plus at most fifteen per-QP DCQCN slots.
+   assert MAX_QP_G <= 15
+      report "RoCEv2AxiStreamRdma: MAX_QP_G exceeds the 15 DCQCN slots in the " &
+             "64-KiB AXI-Lite window"
       severity failure;
 
    U_XBAR : entity surf.AxiLiteCrossbar
@@ -174,32 +206,91 @@ begin
          cnp                   => cnpVec);
 
    GEN_DCQCN : if DCQCN_EN_G generate
-      cnpReceived <= uOr(cnpVec);          -- single shared Dcqcn (matches old cnp_received)
-      U_Dcqcn : entity surf.Dcqcn
+      -- The local QP index is encoded in all eight tDest bits.  A malformed
+      -- out-of-range tag is consumed/dropped by AxiStreamDeMux.
+      U_DcqcnDemux : entity surf.AxiStreamDeMux
          generic map (
             TPD_G          => TPD_G,
-            AXIS_CONFIG_G  => EMAC_AXIS_CONFIG_C,
+            RST_POLARITY_G => RST_POLARITY_G,
             RST_ASYNC_G    => RST_ASYNC_G,
-            RST_POLARITY_G => RST_POLARITY_G)
+            NUM_MASTERS_G  => MAX_QP_G,
+            MODE_G         => "INDEXED",
+            TDEST_HIGH_G   => 7,
+            TDEST_LOW_G    => 0)
          port map (
-            axisClk         => clk,
-            axisRst         => rst,
-            cnp             => cnpReceived,
-            axilReadMaster  => axilReadMastersX(DCQCN_C),
-            axilReadSlave   => axilReadSlavesX(DCQCN_C),
-            axilWriteMaster => axilWriteMastersX(DCQCN_C),
-            axilWriteSlave  => axilWriteSlavesX(DCQCN_C),
-            sAxisMaster     => engineTxMaster,
-            sAxisSlave      => engineTxSlave,
-            mAxisMaster     => mAxisDataStreamMaster,
-            mAxisSlave      => mAxisDataStreamSlave);
+            axisClk      => clk,
+            axisRst      => rst,
+            sAxisMaster  => engineTxMaster,
+            sAxisSlave   => engineTxSlave,
+            mAxisMasters => dcqcnInMasters,
+            mAxisSlaves  => dcqcnInSlaves);
+
+      GEN_DCQCN_QP : for i in 0 to MAX_QP_G-1 generate
+         U_Dcqcn : entity surf.Dcqcn
+            generic map (
+               TPD_G          => TPD_G,
+               AXIS_CONFIG_G  => EMAC_AXIS_CONFIG_C,
+               BUCKET_SIZE_G  => DCQCN_BUCKET_SIZE_G,
+               RST_ASYNC_G    => RST_ASYNC_G,
+               RST_POLARITY_G => RST_POLARITY_G)
+            port map (
+               axisClk         => clk,
+               axisRst         => rst,
+               cnp             => cnpVec(i),
+               axilReadMaster  => axilReadMastersX(i+1),
+               axilReadSlave   => axilReadSlavesX(i+1),
+               axilWriteMaster => axilWriteMastersX(i+1),
+               axilWriteSlave  => axilWriteSlavesX(i+1),
+               sAxisMaster     => dcqcnInMasters(i),
+               sAxisSlave      => dcqcnInSlaves(i),
+               mAxisMaster     => dcqcnOutMasters(i),
+               mAxisSlave      => dcqcnOutSlaves(i));
+      end generate GEN_DCQCN_QP;
+
+      -- With interleaving disabled the mux keeps a selected QP until its
+      -- accepted tLast beat, preserving packet boundaries.
+      U_DcqcnMux : entity surf.AxiStreamMux
+         generic map (
+            TPD_G          => TPD_G,
+            RST_POLARITY_G => RST_POLARITY_G,
+            RST_ASYNC_G    => RST_ASYNC_G,
+            NUM_SLAVES_G   => MAX_QP_G,
+            MODE_G         => "PASSTHROUGH",
+            ILEAVE_EN_G    => false)
+         port map (
+            axisClk      => clk,
+            axisRst      => rst,
+            sAxisMasters => dcqcnOutMasters,
+            sAxisSlaves  => dcqcnOutSlaves,
+            mAxisMaster  => dcqcnMuxMaster,
+            mAxisSlave   => dcqcnMuxSlave);
+
+      dcqcnMuxSlave <= mAxisDataStreamSlave;
+
+      CLEAR_DCQCN_TDEST : process (dcqcnMuxMaster) is
+         variable v : AxiStreamMasterType;
+      begin
+         v       := dcqcnMuxMaster;
+         v.tDest := (others => '0');
+         mAxisDataStreamMaster <= v;
+      end process CLEAR_DCQCN_TDEST;
    end generate GEN_DCQCN;
 
    BYPASS_DCQCN : if not DCQCN_EN_G generate
-      mAxisDataStreamMaster          <= engineTxMaster;
-      engineTxSlave                  <= mAxisDataStreamSlave;
-      axilReadSlavesX(DCQCN_C)       <= AXI_LITE_READ_SLAVE_EMPTY_DECERR_C;
-      axilWriteSlavesX(DCQCN_C)      <= AXI_LITE_WRITE_SLAVE_EMPTY_DECERR_C;
+      engineTxSlave <= mAxisDataStreamSlave;
+
+      CLEAR_BYPASS_TDEST : process (engineTxMaster) is
+         variable v : AxiStreamMasterType;
+      begin
+         v       := engineTxMaster;
+         v.tDest := (others => '0');
+         mAxisDataStreamMaster <= v;
+      end process CLEAR_BYPASS_TDEST;
+
+      GEN_DISABLED_AXIL : for i in 1 to MAX_QP_G generate
+         axilReadSlavesX(i)  <= AXI_LITE_READ_SLAVE_EMPTY_DECERR_C;
+         axilWriteSlavesX(i) <= AXI_LITE_WRITE_SLAVE_EMPTY_DECERR_C;
+      end generate GEN_DISABLED_AXIL;
    end generate BYPASS_DCQCN;
 
 end architecture rtl;

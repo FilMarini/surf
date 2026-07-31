@@ -111,6 +111,9 @@ entity TransportLayer is
       -- rdmaDataStreamPipeOut : DataStreamPipeOut (290b)
       dataStreamOutValid : out sl;
       dataStreamOutData  : out slv(289 downto 0);
+      -- Local QP index associated with dataStreamOutData.  The value is held
+      -- with the arbiter payload, so it remains aligned under backpressure.
+      dataStreamOutQp    : out slv(7 downto 0);
       dataStreamOutRdEn  : in  sl;
 
       -- workCompPipeOutRQ / workCompPipeOutSQ : PipeOut#(WorkComp 222b)
@@ -157,6 +160,7 @@ architecture rtl of TransportLayer is
 
    -- Payload widths, traced from the emitted child entities (FSM spec table)
    constant DATA_STREAM_W_C  : positive := 290;  -- DataStream
+   constant TAGGED_DATA_STREAM_W_C : positive := DATA_STREAM_W_C + 8;
    constant WORK_REQ_W_C     : positive := 601;  -- WorkReq
    constant RECV_REQ_W_C     : positive := 216;  -- RecvReq
    constant WORK_COMP_W_C    : positive := 222;  -- WorkComp
@@ -236,6 +240,8 @@ architecture rtl of TransportLayer is
    -- W5: RDMA DataStream output arbiter (even slot 2i = resp/RQ, odd = req/SQ)
    signal dataStreamArbInValid    : slv(2*MAX_QP_G-1 downto 0);
    signal dataStreamArbInDout     : slv(2*MAX_QP_G*DATA_STREAM_W_C-1 downto 0);
+   signal dataStreamArbTaggedDout : slv(2*MAX_QP_G*TAGGED_DATA_STREAM_W_C-1 downto 0);
+   signal dataStreamArbOutDout    : slv(TAGGED_DATA_STREAM_W_C-1 downto 0);
    signal dataStreamArbInFinished : slv(2*MAX_QP_G-1 downto 0);
    signal dataStreamArbInRd       : slv(2*MAX_QP_G-1 downto 0);
 
@@ -343,6 +349,10 @@ architecture rtl of TransportLayer is
    signal statusPmtuMux   : slv(2 downto 0);
 
 begin
+
+   assert MAX_QP_G <= 256
+      report "TransportLayer: the AXI-Stream QP tag supports at most 256 QPs"
+      severity failure;
 
    -- Static generic legality check (kept outside the translate pragmas: it
    -- must also fail synthesis elaboration on an all-disabled configuration).
@@ -747,22 +757,42 @@ begin
       dataStreamArbInFinished(k) <= dataStreamArbInDout(k*DATA_STREAM_W_C);
    end generate GEN_DS_FINISHED;
 
+   -- The two arbiter inputs for QP i (RQ response and SQ request) carry the
+   -- same local QP tag.  Keeping the tag in the arbiter payload, rather than
+   -- deriving it after arbitration, guarantees alignment with buffered data.
+   GEN_DS_QP_TAG : for i in 0 to MAX_QP_G-1 generate
+      dataStreamArbTaggedDout((2*i+1)*TAGGED_DATA_STREAM_W_C-1 downto
+                              (2*i)*TAGGED_DATA_STREAM_W_C) <=
+         toSlv(i, 8) &
+         dataStreamArbInDout((2*i+1)*DATA_STREAM_W_C-1 downto
+                             (2*i)*DATA_STREAM_W_C);
+      dataStreamArbTaggedDout((2*i+2)*TAGGED_DATA_STREAM_W_C-1 downto
+                              (2*i+1)*TAGGED_DATA_STREAM_W_C) <=
+         toSlv(i, 8) &
+         dataStreamArbInDout((2*i+2)*DATA_STREAM_W_C-1 downto
+                             (2*i+1)*DATA_STREAM_W_C);
+   end generate GEN_DS_QP_TAG;
+
    U_DataStreamArb : entity surf.PipeOutArbiter
       generic map (
          TPD_G        => TPD_G,
          PORT_COUNT_G => 2*MAX_QP_G,
-         DATA_WIDTH_G => DATA_STREAM_W_C)
+         DATA_WIDTH_G => TAGGED_DATA_STREAM_W_C)
       port map (
          clk         => clk,
          rst         => rst,
          inValid     => dataStreamArbInValid,
-         inDout      => dataStreamArbInDout,
+         inDout      => dataStreamArbTaggedDout,
          inFinished  => dataStreamArbInFinished,
          inRd        => dataStreamArbInRd,
          outNotEmpty => dataStreamOutValid,
-         outDout     => dataStreamOutData,
+         outDout     => dataStreamArbOutDout,
          outFinished => open,
          outDeq      => dataStreamOutRdEn);
+
+   dataStreamOutData <= dataStreamArbOutDout(DATA_STREAM_W_C-1 downto 0);
+   dataStreamOutQp   <= dataStreamArbOutDout(TAGGED_DATA_STREAM_W_C-1 downto
+                                             DATA_STREAM_W_C);
 
    -----------------------------------------------------------------------------
    -- W6 — Work-completion arbiters (TransportLayer.bsv:164-166,176-177);

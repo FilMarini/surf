@@ -55,7 +55,7 @@ package RocePkg is
 
    constant BLUE_DATA_STREAM_CONFIG_C : AxiStreamConfigType := ssiAxiStreamConfig(
       dataBytes => TDATA_ROCE_NUM_BYTES_C,
-      tDestBits => 0);
+      tDestBits => 8);
 
    constant SURF_DATA_STREAM_CONFIG_C : AxiStreamConfigType := ssiAxiStreamConfig(
       dataBytes => TDATA_UDP_NUM_BYTES_C,
@@ -340,6 +340,10 @@ package RocePkg is
    function DataStreamToSlv (ds : RoceDataStreamMasterType) return slv;
    function SlvToDataStream (valid : sl; d : slv(289 downto 0)) return RoceDataStreamMasterType;
    function DataStreamToAxiStream (ds : RoceDataStreamMasterType) return AxiStreamMasterType;
+   function DataStreamToAxiStream (
+      ds     : RoceDataStreamMasterType;
+      qpIndex : slv(7 downto 0))
+      return AxiStreamMasterType;
    function AxiStreamToDataStream (axis : AxiStreamMasterType) return RoceDataStreamMasterType;
 
    -- WorkReq
@@ -417,10 +421,19 @@ package body RocePkg is
    -- BSV DataStream: first wire byte = data(255:248), byteEn(31).
    -- AXI-Stream:     first wire byte = tData(7:0),     tKeep(0).
    function DataStreamToAxiStream (ds : RoceDataStreamMasterType) return AxiStreamMasterType is
+   begin
+      return DataStreamToAxiStream(ds, x"00");
+   end function DataStreamToAxiStream;
+
+   function DataStreamToAxiStream (
+      ds      : RoceDataStreamMasterType;
+      qpIndex : slv(7 downto 0))
+      return AxiStreamMasterType is
       variable ret : AxiStreamMasterType;
    begin
       ret        := axiStreamMasterInit(BLUE_DATA_STREAM_CONFIG_C);
       ret.tValid := ds.valid;
+      ret.tDest  := qpIndex;
       for j in 0 to 31 loop
          ret.tData(8*j+7 downto 8*j) := ds.data(255-8*j downto 248-8*j);
          ret.tKeep(j)                := ds.byteEn(31-j);

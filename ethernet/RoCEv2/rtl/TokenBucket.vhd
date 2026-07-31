@@ -27,6 +27,10 @@ entity TokenBucket is
       TPD_G         : time    := 1 ns;
       CLK_FREQ_G    : real    := 156.25E+6;
       FRAC_BITS_G   : natural := 16;
+      -- Maximum idle credit.  Keep this close to a few maximum-size frames:
+      -- a very large value lets an idle QP transmit an entire test burst at
+      -- line rate before its reduced DCQCN Rc becomes observable.
+      BUCKET_SIZE_G : slv(31 downto 0) := x"00004000";  -- 16 KiB
       AXIS_CONFIG_G : AxiStreamConfigType
    );
    port (
@@ -144,7 +148,7 @@ begin  -- architecture rtl
       generic map (
          TPD_G         => TPD_G,
          FRAC_BITS_G   => FRAC_BITS_G,     -- frac bits for byte per clk
-         BUCKET_SIZE_G => x"00100000",     -- in byte
+         BUCKET_SIZE_G => BUCKET_SIZE_G,
          AXIS_CONFIG_G => AXIS_CONFIG_G)
       port map (
          axisClk      => axisClk,
