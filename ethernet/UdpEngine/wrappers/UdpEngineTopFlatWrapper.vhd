@@ -35,6 +35,9 @@ entity UdpEngineTopFlatWrapper is
       broadcastIp      : in  slv(31 downto 0);
       clientRemotePort : in  slv(15 downto 0);
       clientRemoteIp   : in  slv(31 downto 0);
+      rocePathMetaValid : in  sl := '0';
+      rocePathMetaData  : in  slv(56 downto 0) := (others => '0');
+      rocePathMetaReady : out sl;
       dhcpIpOut        : out slv(31 downto 0);
       sUdpTValid       : in  sl;
       sUdpTData        : in  slv(127 downto 0);
@@ -278,6 +281,9 @@ begin
          obClientSlaves   => mClientSlaves,
          ibClientMasters  => sClientMasters,
          ibClientSlaves   => sClientSlaves,
+         rocePathMetaValid => rocePathMetaValid,
+         rocePathMetaData  => rocePathMetaData,
+         rocePathMetaReady => rocePathMetaReady,
          clk              => clk,
          rst              => rst);
 

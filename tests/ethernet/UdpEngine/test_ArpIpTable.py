@@ -105,6 +105,29 @@ async def arp_ip_table_expiration_reclaims_entry_test(dut):
     assert int(dut.macAddr.value) == LEGACY_MAC_CFGS[2]
 
 
+@cocotb.test()
+async def arp_ip_table_ip_only_entry_is_not_resolved_test(dut):
+    bench = await setup_arp_ip_table_bench(dut)
+
+    # ARP allocates the IP half before the reply supplies a MAC.  That
+    # intermediate entry must not be reported as a usable associative hit.
+    dut.ipWrAddr.value = LEGACY_IP_CFGS[1]
+    await pulse_signal(dut.ipWrEn, clk=bench.clk)
+    dut.ipAddrIn.value = LEGACY_IP_CFGS[1]
+    dut.pos.value = POS_IP_MATCH_LOOKUP
+    await cycle(bench.clk, 1)
+    assert int(dut.found.value) == 0
+    assert int(dut.macAddr.value) == 0
+    assert int(dut.ipAddrOut.value) == LEGACY_IP_CFGS[1]
+
+    dut.macWrAddr.value = LEGACY_MAC_CFGS[1]
+    await pulse_signal(dut.macWrEn, clk=bench.clk)
+    await cycle(bench.clk, 1)
+    assert int(dut.found.value) == 1
+    assert int(dut.macAddr.value) == LEGACY_MAC_CFGS[1]
+    assert int(dut.ipAddrOut.value) == LEGACY_IP_CFGS[1]
+
+
 @pytest.mark.parametrize("parameters", [pytest.param({}, id="arp_ip_table_flat_wrapper")])
 def test_ArpIpTable(parameters):
     run_surf_vhdl_test(

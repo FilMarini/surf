@@ -218,8 +218,12 @@ begin
          for i in 0 to ENTRIES_G-1 loop
             if matchArray(i) = '1' then
                foundMacAddr := wr.macLutTable(i);
-               ipFound      := '1';
-               exit;                    -- Exit as soon as a match is found
+               foundIpAddr  := wr.ipLutTable(i);
+               if (uOr(foundIpAddr) /= '0') and
+                  (uOr(foundMacAddr) /= '0') then
+                  ipFound := '1';
+                  exit;                 -- Exit as soon as a usable match is found
+               end if;
             end if;
          end loop;
       end if;

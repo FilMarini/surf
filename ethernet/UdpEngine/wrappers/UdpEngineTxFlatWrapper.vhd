@@ -40,6 +40,11 @@ entity UdpEngineTxFlatWrapper is
       arpTabFound   : in  sl;
       arpTabIpAddr  : in  slv(31 downto 0);
       arpTabMacAddr : in  slv(47 downto 0);
+      rocePathMetaValid : in  sl := '0';
+      rocePathMetaData  : in  slv(56 downto 0) := (others => '0');
+      rocePathMetaReady : out sl;
+      roceArpLookupValid : out sl;
+      roceArpLookupIp    : out slv(31 downto 0);
       sAppTValid    : in  sl;
       sAppTData     : in  slv(127 downto 0);
       sAppTKeep     : in  slv(15 downto 0);
@@ -157,6 +162,11 @@ begin
          arpTabFound(0) => arpTabFound,
          arpTabIpAddr   => arpTabIpAddrA,
          arpTabMacAddr  => arpTabMacA,
+         rocePathMetaValid => rocePathMetaValid,
+         rocePathMetaData  => rocePathMetaData,
+         rocePathMetaReady => rocePathMetaReady,
+         roceArpLookupValid => roceArpLookupValid,
+         roceArpLookupIp    => roceArpLookupIp,
          obDhcpMaster   => sDhcpMaster,
          obDhcpSlave    => sDhcpSlave,
          clk            => clk,

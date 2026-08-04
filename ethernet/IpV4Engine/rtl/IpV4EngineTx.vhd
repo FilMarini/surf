@@ -67,6 +67,8 @@ architecture rtl of IpV4EngineTx is
       tKeep    : slv(15 downto 0);
       tData    : slv(127 downto 0);
       tDest    : slv(7 downto 0);
+      trafficClass : slv(7 downto 0);
+      ttl      : slv(7 downto 0);
       id       : slv(15 downto 0);
       rxSlave  : AxiStreamSlaveType;
       txMaster : AxiStreamMasterType;
@@ -77,6 +79,8 @@ architecture rtl of IpV4EngineTx is
       tKeep    => (others => '0'),
       tData    => (others => '0'),
       tDest    => (others => '0'),
+      trafficClass => toSlv(DSCP_G, 6) & ECN_G,
+      ttl      => TTL_G,
       id       => (others => '0'),
       rxSlave  => AXI_STREAM_SLAVE_INIT_C,
       txMaster => AXI_STREAM_MASTER_INIT_C,
@@ -143,6 +147,17 @@ begin
                v.rxSlave.tReady := '1';
                -- Latch the TDEST
                v.tDest          := rxMaster.tDest;
+               -- UDP/RoCE marks its packet-local route in tUser(7) and uses
+               -- the otherwise-reserved pseudo-header bytes for Traffic
+               -- Class and TTL.  Other protocols retain the configured
+               -- runtime/default values, latched once at frame start.
+               if rxMaster.tUser(7) = '1' then
+                  v.trafficClass := rxMaster.tData(55 downto 48);
+                  v.ttl          := rxMaster.tData(63 downto 56);
+               else
+                  v.trafficClass := dscp & ecn;
+                  v.ttl          := TTL_G;
+               end if;
                -- Check for SOF with no EOF
                if (ssiGetUserSof(EMAC_AXIS_CONFIG_C, rxMaster) = '1') and (rxMaster.tLast = '0') then
                   -- Send the RAW Ethernet header
@@ -162,8 +177,7 @@ begin
                   v.txMaster.tData(95 downto 48)   := localMac;
                   v.txMaster.tData(111 downto 96)  := IPV4_TYPE_C;
                   v.txMaster.tData(119 downto 112) := x"45";  -- IPVersion = 4,Header length = 5
-                  v.txMaster.tData(127 downto 122) := dscp;  --- DSCP (runtime register; resets to DSCP_G)
-                  v.txMaster.tData(121 downto 120) := ecn;  --- ECN (runtime register; resets to ECN_G)
+                  v.txMaster.tData(127 downto 120) := v.trafficClass;
                   -- Track the leftovers
                   v.tData(63 downto 0)             := rxMaster.tData(127 downto 64);
                   -- Next state
@@ -182,7 +196,7 @@ begin
                v.txMaster.tData(31 downto 24)   := r.id(7 downto 0);  -- IPV4_ID(7 downto 0)
                v.txMaster.tData(39 downto 32)   := x"40";  -- Flags(2 downto 0) =  Don't Fragment (DF) and Fragment_Offsets(12 downto 8) = 0x0
                v.txMaster.tData(47 downto 40)   := x"00";  -- Fragment_Offsets(7 downto 0) = 0x0
-               v.txMaster.tData(55 downto 48)   := TTL_G;  -- Time-To-Live (number of hops before packet is discarded)
+               v.txMaster.tData(55 downto 48)   := r.ttl;  -- Time-To-Live (number of hops before packet is discarded)
                v.txMaster.tData(63 downto 56)   := PROTOCOL_G(conv_integer(r.tDest));  -- Protocol
                v.txMaster.tData(71 downto 64)   := x"00";  -- IPV4_Checksum(15 downto 8)  Note: Filled in next state
                v.txMaster.tData(79 downto 72)   := x"00";  -- IPV4_Checksum(7 downto 0)   Note: Filled in next state

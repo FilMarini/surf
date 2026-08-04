@@ -73,6 +73,9 @@ entity UdpEngineWrapper is
       obClientSlaves   : in  AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0)  := (others => AXI_STREAM_SLAVE_FORCE_C);
       ibClientMasters  : in  AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0) := (others => AXI_STREAM_MASTER_INIT_C);
       ibClientSlaves   : out AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
+      rocePathMetaValid : in  sl := '0';
+      rocePathMetaData  : in  slv(56 downto 0) := (others => '0');
+      rocePathMetaReady : out sl := '0';
       -- AXI-Lite Interface
       axilReadMaster   : in  AxiLiteReadMasterType                          := AXI_LITE_READ_MASTER_INIT_C;
       axilReadSlave    : out AxiLiteReadSlaveType;
@@ -227,6 +230,9 @@ begin
          obClientSlaves   => obClientSlaves,
          ibClientMasters  => ibClientMasters,
          ibClientSlaves   => ibClientSlaves,
+         rocePathMetaValid => rocePathMetaValid,
+         rocePathMetaData  => rocePathMetaData,
+         rocePathMetaReady => rocePathMetaReady,
          -- Clock and Reset
          clk              => clk,
          rst              => rst);

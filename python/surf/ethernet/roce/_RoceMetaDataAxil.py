@@ -592,6 +592,47 @@ class RoceMetaDataAxil(pr.Device):
             mode        = 'RW',
         ))
 
+        self.add(pr.RemoteVariable(
+            name        = 'QpDgid',
+            description = ('RoCEv2 destination GID. Initial hardware support requires an '
+                           'IPv4-mapped GID (::ffff:a.b.c.d); staged before INIT-to-RTR'),
+            offset      = 0x360,
+            bitSize     = 128,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RW',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'QpTrafficClass',
+            description = 'Per-QP IPv4 Traffic Class byte: DSCP[7:2], ECN[1:0]',
+            offset      = 0x370,
+            bitSize     = 8,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RW',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'QpHopLimit',
+            description = 'Per-QP IPv4 TTL (RoCE GRH hop_limit semantics)',
+            offset      = 0x374,
+            bitSize     = 8,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RW',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'QpSgidIndex',
+            description = 'Reserved source-GID selector; zero selects the current local IPv4 address',
+            offset      = 0x378,
+            bitSize     = 8,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RW',
+        ))
+
         ##############################
         # Response bank (RO, 0x400; captured on completion)
         ##############################
@@ -668,5 +709,55 @@ class RoceMetaDataAxil(pr.Device):
             bitSize     = 24,
             bitOffset   = 0,
             base        = pr.UInt,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RespQpDgid',
+            description = 'Full staged DGID captured with the completed QP request',
+            offset      = 0x418,
+            bitSize     = 128,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RespQpTrafficClass',
+            description = 'Captured packet-local IPv4 traffic class',
+            offset      = 0x428,
+            bitSize     = 8,
+            bitOffset   = 0,
+            base        = pr.UInt,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RespQpHopLimit',
+            description = 'Captured packet-local IPv4 hop limit/TTL',
+            offset      = 0x428,
+            bitSize     = 8,
+            bitOffset   = 8,
+            base        = pr.UInt,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RespQpSgidIndex',
+            description = 'Captured source-GID selector',
+            offset      = 0x428,
+            bitSize     = 8,
+            bitOffset   = 16,
+            base        = pr.UInt,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RespQpPathValid',
+            description = 'DGID validated as a non-zero IPv4-mapped destination',
+            offset      = 0x428,
+            bitSize     = 1,
+            bitOffset   = 24,
+            base        = pr.Bool,
             mode        = 'RO',
         ))

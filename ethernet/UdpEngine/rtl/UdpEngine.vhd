@@ -66,12 +66,15 @@ entity UdpEngine is
       ibServerMasters  : in  AxiStreamMasterArray(SERVER_SIZE_G-1 downto 0);
       ibServerSlaves   : out AxiStreamSlaveArray(SERVER_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
       -- Interface to UDP Client engine(s)
-      clientRemotePort : in  Slv16Array(CLIENT_SIZE_G-1 downto 0);  --  big-Endian configuration
-      clientRemoteIp   : in  Slv32Array(CLIENT_SIZE_G-1 downto 0);  --  big-Endian configuration
-      obClientMasters  : out AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
-      obClientSlaves   : in  AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);
-      ibClientMasters  : in  AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0);
-      ibClientSlaves   : out AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
+      clientRemotePort  : in  Slv16Array(CLIENT_SIZE_G-1 downto 0);  --  big-Endian configuration
+      clientRemoteIp    : in  Slv32Array(CLIENT_SIZE_G-1 downto 0);  --  big-Endian configuration
+      obClientMasters   : out AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
+      obClientSlaves    : in  AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);
+      ibClientMasters   : in  AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0);
+      ibClientSlaves    : out AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);  --  tData is big-Endian configuration
+      rocePathMetaValid : in  sl                              := '0';
+      rocePathMetaData  : in  slv(56 downto 0)                := (others => '0');
+      rocePathMetaReady : out sl                              := '0';
       -- Clock and Reset
       clk              : in  sl;
       rst              : in  sl);
@@ -105,8 +108,20 @@ architecture mapping of UdpEngine is
    signal arpTabMacWe    : slv(CLIENT_SIZE_G-1 downto 0);
    signal arpTabMacAddrW : Slv48Array(CLIENT_SIZE_G-1 downto 0);
    signal arpTabPos      : Slv8Array(CLIENT_SIZE_G-1 downto 0);
+   signal clientArpIp    : Slv32Array(CLIENT_SIZE_G-1 downto 0);
+   signal roceArpLookupValid : sl;
+   signal roceArpLookupIp    : slv(31 downto 0);
 
 begin
+
+   -- Dynamic RoCE lookup is confined to client zero and is driven only by
+   -- packet-owned state in UdpEngineTx.  The configured clientRemoteIp
+   -- register and all other clients/servers remain unchanged.
+   GEN_CLIENT_ARP_IP : for i in 0 to CLIENT_SIZE_G-1 generate
+      clientArpIp(i) <= roceArpLookupIp
+                        when i = 0 and roceArpLookupValid = '1' else
+                        clientRemoteIp(i);
+   end generate GEN_CLIENT_ARP_IP;
 
    assert ((SERVER_EN_G = true) or (CLIENT_EN_G = true)) report
       "UdpEngine: Either SERVER_EN_G or CLIENT_EN_G must be true" severity failure;
@@ -212,6 +227,8 @@ begin
             remoteMac    => serverRemoteMac,
             ibMasters    => ibServerMasters,
             ibSlaves     => ibServerSlaves,
+            roceArpLookupValid => open,
+            roceArpLookupIp    => open,
             -- Interface to DHCP Engine
             obDhcpMaster => obDhcpMaster,
             obDhcpSlave  => obDhcpSlave,
@@ -237,7 +254,7 @@ begin
                clk                  => clk,
                rst                  => rst,
                -- Read LUT
-               ipAddrIn             => clientRemoteIp(i),
+               ipAddrIn             => clientArpIp(i),
                pos                  => arpTabPos(i),
                found                => arpTabFound(i),
                macAddr              => arpTabMacAddr(i),
@@ -247,7 +264,7 @@ begin
                clientRemoteDetIp    => clientRemoteDetIp(i),
                -- Write LUT
                ipWrEn               => arpTabIpWe(i),
-               IpWrAddr             => clientRemoteIp(i),
+               IpWrAddr             => clientArpIp(i),
                macWrEn              => arpTabMacWe(i),
                macWrAddr            => arpTabMacAddrW(i));
       end generate GEN_ARP_TABLES;
@@ -277,7 +294,7 @@ begin
             -- Interface to UDP Client engine(s)
             clientRemoteDetValid => clientRemoteDetValid,
             clientRemoteDetIp    => clientRemoteDetIp,
-            clientRemoteIp       => clientRemoteIp,
+            clientRemoteIp       => clientArpIp,
             clientRemoteMac      => clientRemoteMac,
             -- Clock and Reset
             clk                  => clk,
@@ -308,6 +325,11 @@ begin
             arpTabFound   => arpTabFound,
             arpTabIpAddr  => arpTabIpAddr,
             arpTabMacAddr => arpTabMacAddr,
+            rocePathMetaValid => rocePathMetaValid,
+            rocePathMetaData  => rocePathMetaData,
+            rocePathMetaReady => rocePathMetaReady,
+            roceArpLookupValid => roceArpLookupValid,
+            roceArpLookupIp    => roceArpLookupIp,
             -- Clock and Reset
             clk           => clk,
             rst           => rst);
@@ -347,6 +369,9 @@ begin
       arpReqMasters   <= (others => AXI_STREAM_MASTER_INIT_C);
       arpAckSlaves    <= (others => AXI_STREAM_SLAVE_FORCE_C);
       clientRemoteMac <= (others => (others => '0'));
+      rocePathMetaReady <= '0';
+      roceArpLookupValid <= '0';
+      roceArpLookupIp    <= (others => '0');
 
    end generate;
 

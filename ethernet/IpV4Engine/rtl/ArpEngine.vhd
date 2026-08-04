@@ -76,6 +76,7 @@ architecture rtl of ArpEngine is
       arpReqSlaves  : AxiStreamSlaveArray(CLIENT_SIZE_G-1 downto 0);
       arpAckMasters : AxiStreamMasterArray(CLIENT_SIZE_G-1 downto 0);
       arpTimers     : NaturalArray(CLIENT_SIZE_G-1 downto 0);
+      arpTimerIp    : Slv32Array(CLIENT_SIZE_G-1 downto 0);
       reqCnt        : natural range 0 to CLIENT_SIZE_G-1;
       ackCnt        : natural range 0 to CLIENT_SIZE_G-1;
       state         : StateType;
@@ -88,6 +89,7 @@ architecture rtl of ArpEngine is
       arpReqSlaves  => (others => AXI_STREAM_SLAVE_INIT_C),
       arpAckMasters => (others => AXI_STREAM_MASTER_INIT_C),
       arpTimers     => (others => 0),
+      arpTimerIp    => (others => (others => '0')),
       reqCnt        => 0,
       ackCnt        => 0,
       state         => IDLE_S);
@@ -145,9 +147,17 @@ begin
                   v.reqCnt := r.reqCnt + 1;
                end if;
                -- Check the tValid and timer
-               if (arpReqMasters(r.reqCnt).tValid = '1') and (r.arpTimers(r.reqCnt) = 0) then
+               -- Suppress retries only for the same target.  A client can
+               -- replace its configured fallback IP with a packet-owned RoCE
+               -- DGID while the fallback request is still cooling down.
+               if (arpReqMasters(r.reqCnt).tValid = '1') and
+                  ((r.arpTimers(r.reqCnt) = 0) or
+                   (r.arpTimerIp(r.reqCnt) /=
+                    arpReqMasters(r.reqCnt).tData(31 downto 0))) then
                   -- Set the timer
                   v.arpTimers(r.reqCnt) := TIMER_1_SEC_C;
+                  v.arpTimerIp(r.reqCnt) :=
+                     arpReqMasters(r.reqCnt).tData(31 downto 0);
                   -- Check if localhost
                   if localIp = arpReqMasters(r.reqCnt).tData(31 downto 0) then
                      -- ACK the request

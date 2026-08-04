@@ -38,6 +38,7 @@ from tests.ethernet.EthMacCore.ethmac_test_utils import (
 )
 from tests.ethernet.UdpEngine.udp_test_utils import (
     LEGACY_IPS,
+    LEGACY_IP_CFGS,
     LEGACY_MAC_WIRES,
     UDP_RTL_SOURCES,
     UDP_CLIENT_PORT,
@@ -200,6 +201,75 @@ async def udp_engine_server_tx_path_test(dut):
         dst_port=0x4567,
         payload=outbound_payload,
     )
+
+
+@cocotb.test()
+async def udp_engine_roce_registered_lookup_arp_miss_test(dut):
+    bench = await setup_udp_top_bench(dut)
+    payload = b"roce-arp-miss"
+    traffic_class = 0x5A
+    hop_limit = 0x21
+    path_meta = (
+        LEGACY_IP_CFGS[2]
+        | (traffic_class << 32)
+        | (hop_limit << 40)
+        | (1 << 56)
+    )
+
+    # The configured client points at .11, while this packet owns .12.  Its
+    # SOF must be accepted before either address has resolved.
+    dut.rocePathMetaData.value = path_meta
+    dut.rocePathMetaValid.value = 1
+    await bench.client_source.send(frame_beats_from_bytes(payload)[0], clk=bench.clk)
+    dut.rocePathMetaValid.value = 0
+    dut.rocePathMetaData.value = 0
+
+    # Any older configured-address request may still be visible at the port;
+    # the registered packet lookup must supersede it with .12.
+    for _ in range(2):
+        arp_request = await bench.arp_req_sink.recv(
+            clk=bench.clk,
+            ready_signal=dut.arpReqTReady,
+        )
+        if payload_from_beat(arp_request)[:4] == ipv4_to_bytes(LEGACY_IPS[2]):
+            break
+    else:
+        raise AssertionError("RoCE packet-local ARP request never targeted .12")
+
+    arp_ack = frame_beats_from_bytes(LEGACY_MAC_WIRES[2].to_bytes(6, byteorder="big"))
+    ack_send = cocotb.start_soon(
+        send_contiguous_frame(bench.arp_ack_source, arp_ack, clk=bench.clk)
+    )
+    await cycle(bench.clk, ARP_RESOLUTION_LATENCY_CYCLES)
+    await ack_send
+
+    observed = await recv_frame(
+        bench.udp_sink,
+        clk=bench.clk,
+        ready_signal=dut.mUdpTReady,
+        timeout_cycles=96,
+    )
+    expected = bytearray(
+        build_udp_tx_pseudo_frame(
+            dst_mac=LEGACY_MAC_WIRES[2],
+            src_ip=LEGACY_IPS[0],
+            dst_ip=LEGACY_IPS[2],
+            src_port=UDP_CLIENT_PORT,
+            dst_port=UDP_SERVER_PORT,
+            payload=payload,
+        )
+    )
+    expected[6] = traffic_class
+    expected[7] = hop_limit
+    assert payload_from_beats(observed) == bytes(expected)
+
+    # Releasing the RoCE frame returns ARP ownership to the configured .11
+    # client route; neither address is written back into configuration.
+    configured_request = await bench.arp_req_sink.recv(
+        clk=bench.clk,
+        ready_signal=dut.arpReqTReady,
+    )
+    assert payload_from_beat(configured_request)[:4] == ipv4_to_bytes(LEGACY_IPS[1])
 
 
 @pytest.mark.parametrize("parameters", [pytest.param({}, id="udp_engine_top_flat_wrapper")])

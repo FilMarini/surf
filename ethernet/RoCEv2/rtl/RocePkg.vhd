@@ -75,6 +75,17 @@ package RocePkg is
    constant ROCE_MD_REQ_W_C        : positive := 303;
    constant ROCE_MD_RESP_W_C       : positive := 276;
 
+   -- Packet-local RoCEv2 IPv4 routing sideband.  The sideband is transferred
+   -- once, together with the accepted start-of-frame beat of its packet.
+   -- Keeping this information out of tDest/tData preserves the UDP payload
+   -- and the RoCE ICRC while allowing a full IPv4 address per packet.
+   constant ROCE_TX_PATH_META_W_C             : positive := 57;
+   constant ROCE_TX_PATH_DEST_IP_LSB_C        : natural  := 0;
+   constant ROCE_TX_PATH_TRAFFIC_CLASS_LSB_C  : natural  := 32;
+   constant ROCE_TX_PATH_HOP_LIMIT_LSB_C      : natural  := 40;
+   constant ROCE_TX_PATH_SOURCE_SELECTOR_LSB_C : natural := 48;
+   constant ROCE_TX_PATH_OVERRIDE_VALID_BIT_C : natural  := 56;
+
    -- MetaDataReq/Resp union tags (MetaData.bsv:661-671, first member = 0)
    constant ROCE_MD_TAG_PD_C : slv(1 downto 0) := "00";
    constant ROCE_MD_TAG_MR_C : slv(1 downto 0) := "01";

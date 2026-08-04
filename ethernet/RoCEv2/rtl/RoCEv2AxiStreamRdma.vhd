@@ -54,6 +54,10 @@ entity RoCEv2AxiStreamRdma is
       sAxisDataStreamSlave  : out AxiStreamSlaveType;
       mAxisDataStreamMaster : out AxiStreamMasterType;
       mAxisDataStreamSlave  : in  AxiStreamSlaveType;
+      -- One packet-local path item is transferred with each accepted TX SOF.
+      txPathMetaValid       : out sl := '0';
+      txPathMetaData        : out slv(ROCE_TX_PATH_META_W_C-1 downto 0) := (others => '0');
+      txPathMetaReady       : in  sl := '1';
       -- WorkReq / RecvReq
       sWorkReqMaster      : in  RoceWorkReqMasterType;
       sWorkReqSlave       : out RoceWorkReqSlaveType;
@@ -106,6 +110,9 @@ architecture rtl of RoCEv2AxiStreamRdma is
    signal dcqcnOutSlaves  : AxiStreamSlaveArray(MAX_QP_G-1 downto 0);
    signal dcqcnMuxMaster  : AxiStreamMasterType;
    signal dcqcnMuxSlave   : AxiStreamSlaveType;
+   signal qpPathMeta      : slv(MAX_QP_G*ROCE_TX_PATH_META_W_C-1 downto 0);
+   signal selectedTxMaster : AxiStreamMasterType;
+   signal selectedTxSlave  : AxiStreamSlaveType;
 
 begin
 
@@ -203,6 +210,7 @@ begin
          axilWriteMaster       => axilWriteMastersX(MD_C),
          axilWriteSlave        => axilWriteSlavesX(MD_C),
          mdDoneIrq             => mdDoneIrq,
+         qpPathMeta            => qpPathMeta,
          cnp                   => cnpVec);
 
    GEN_DCQCN : if DCQCN_EN_G generate
@@ -265,32 +273,38 @@ begin
             mAxisMaster  => dcqcnMuxMaster,
             mAxisSlave   => dcqcnMuxSlave);
 
-      dcqcnMuxSlave <= mAxisDataStreamSlave;
-
-      CLEAR_DCQCN_TDEST : process (dcqcnMuxMaster) is
-         variable v : AxiStreamMasterType;
-      begin
-         v       := dcqcnMuxMaster;
-         v.tDest := (others => '0');
-         mAxisDataStreamMaster <= v;
-      end process CLEAR_DCQCN_TDEST;
+      dcqcnMuxSlave   <= selectedTxSlave;
+      selectedTxMaster <= dcqcnMuxMaster;
    end generate GEN_DCQCN;
 
    BYPASS_DCQCN : if not DCQCN_EN_G generate
-      engineTxSlave <= mAxisDataStreamSlave;
-
-      CLEAR_BYPASS_TDEST : process (engineTxMaster) is
-         variable v : AxiStreamMasterType;
-      begin
-         v       := engineTxMaster;
-         v.tDest := (others => '0');
-         mAxisDataStreamMaster <= v;
-      end process CLEAR_BYPASS_TDEST;
+      engineTxSlave   <= selectedTxSlave;
+      selectedTxMaster <= engineTxMaster;
 
       GEN_DISABLED_AXIL : for i in 1 to MAX_QP_G generate
          axilReadSlavesX(i)  <= AXI_LITE_READ_SLAVE_EMPTY_DECERR_C;
          axilWriteSlavesX(i) <= AXI_LITE_WRITE_SLAVE_EMPTY_DECERR_C;
       end generate GEN_DISABLED_AXIL;
    end generate BYPASS_DCQCN;
+
+   -- Snapshot the post-arbitration winner and its path context before either
+   -- UDP consumer can apply backpressure.
+   U_TxPathPipeline : entity surf.RoCEv2TxPathPipeline
+      generic map (
+         TPD_G          => TPD_G,
+         RST_POLARITY_G => RST_POLARITY_G,
+         RST_ASYNC_G    => RST_ASYNC_G,
+         MAX_QP_G       => MAX_QP_G)
+      port map (
+         clk           => clk,
+         rst           => rst,
+         sAxisMaster   => selectedTxMaster,
+         sAxisSlave    => selectedTxSlave,
+         qpPathMeta    => qpPathMeta,
+         mAxisMaster   => mAxisDataStreamMaster,
+         mAxisSlave    => mAxisDataStreamSlave,
+         pathMetaValid => txPathMetaValid,
+         pathMetaData  => txPathMetaData,
+         pathMetaReady => txPathMetaReady);
 
 end architecture rtl;

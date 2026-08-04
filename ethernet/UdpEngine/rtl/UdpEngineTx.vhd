@@ -52,6 +52,14 @@ entity UdpEngineTx is
       arpTabFound   : in  slv(SIZE_G-1 downto 0)        := (others => '0');
       arpTabIpAddr  : in  Slv32Array(SIZE_G-1 downto 0) := (others => (others => '0'));
       arpTabMacAddr : in  Slv48Array(SIZE_G-1 downto 0) := (others => (others => '0'));
+      -- RoCE-only packet-local path sideband for client channel zero:
+      -- [31:0] destIp, [39:32] traffic class, [47:40] hop limit,
+      -- [55:48] source selector, [56] override valid.
+      rocePathMetaValid : in  sl := '0';
+      rocePathMetaData  : in  slv(56 downto 0) := (others => '0');
+      rocePathMetaReady : out sl := '0';
+      roceArpLookupValid : out sl := '0';
+      roceArpLookupIp    : out slv(31 downto 0) := (others => '0');
       -- Interface to DHCP Engine
       obDhcpMaster  : in  AxiStreamMasterType           := AXI_STREAM_MASTER_INIT_C;
       obDhcpSlave   : out AxiStreamSlaveType;
@@ -69,6 +77,10 @@ architecture rtl of UdpEngineTx is
       ACC_ARP_TAB_S,
       DHCP_HDR_S,
       HDR_S,
+      PATH_RESOLVE_S,
+      PATH_HEADER0_S,
+      PATH_HEADER1_S,
+      PATH_DROP_S,
       DHCP_BUFFER_S,
       BUFFER_S,
       LAST_S);
@@ -86,6 +98,15 @@ architecture rtl of UdpEngineTx is
       obDhcpSlave : AxiStreamSlaveType;
       ibSlaves    : AxiStreamSlaveArray(SIZE_G-1 downto 0);
       txMaster    : AxiStreamMasterType;
+      pathFirstBeat : AxiStreamMasterType;
+      pathMeta      : slv(56 downto 0);
+      pathActive    : sl;
+      pathIp        : slv(31 downto 0);
+      pathMac       : slv(47 downto 0);
+      pathSrcIp     : slv(31 downto 0);
+      pathSrcPort   : slv(15 downto 0);
+      pathDstPort   : slv(15 downto 0);
+      pathConfigOk  : sl;
       state       : StateType;
    end record RegType;
    constant REG_INIT_C : RegType := (
@@ -101,6 +122,15 @@ architecture rtl of UdpEngineTx is
       obDhcpSlave => AXI_STREAM_SLAVE_INIT_C,
       ibSlaves    => (others => AXI_STREAM_SLAVE_INIT_C),
       txMaster    => AXI_STREAM_MASTER_INIT_C,
+      pathFirstBeat => AXI_STREAM_MASTER_INIT_C,
+      pathMeta      => (others => '0'),
+      pathActive    => '0',
+      pathIp        => (others => '0'),
+      pathMac       => (others => '0'),
+      pathSrcIp     => (others => '0'),
+      pathSrcPort   => (others => '0'),
+      pathDstPort   => (others => '0'),
+      pathConfigOk  => '0',
       state       => IDLE_S);
 
    signal r   : RegType := REG_INIT_C;
@@ -108,6 +138,7 @@ architecture rtl of UdpEngineTx is
 
    signal txMaster : AxiStreamMasterType;
    signal txSlave  : AxiStreamSlaveType;
+   signal obUdpMasterInt : AxiStreamMasterType;
 
    -- attribute dont_touch             : string;
    -- attribute dont_touch of r        : signal is "TRUE";
@@ -115,8 +146,10 @@ architecture rtl of UdpEngineTx is
 begin
 
    comb : process (arpTabFound, arpTabIpAddr, arpTabMacAddr, ibMasters,
-                   localIp, localMac, obDhcpMaster, r, remoteIp, remoteMac,
-                   remotePort, rst, txSlave) is
+                   localIp, localMac, obDhcpMaster, obUdpMasterInt, obUdpSlave,
+                   r, remoteIp, remoteMac,
+                   remotePort, rocePathMetaData, rocePathMetaValid, rst,
+                   txSlave) is
       variable v : RegType;
    begin
       -- Latch the current value
@@ -125,6 +158,18 @@ begin
       -- Reset the flags
       v.obDhcpSlave := AXI_STREAM_SLAVE_INIT_C;
       v.ibSlaves    := (others => AXI_STREAM_SLAVE_INIT_C);
+      rocePathMetaReady <= '0';
+
+      -- A RoCE route remains owned until its terminal output beat is accepted
+      -- by the IPv4 engine.  Deliberate drops release it after the input frame
+      -- has been drained instead.
+      if (r.pathActive = '1') and (obUdpMasterInt.tValid = '1') and
+         (obUdpMasterInt.tLast = '1') and (obUdpSlave.tReady = '1') then
+         v.pathActive := '0';
+         v.pathMeta   := (others => '0');
+         v.pathIp     := (others => '0');
+         v.pathMac    := (others => '0');
+      end if;
       if (txSlave.tReady = '1') then
          v.txMaster.tValid := '0';
          v.txMaster.tLast  := '0';
@@ -160,8 +205,44 @@ begin
                -- Increment the counter
                v.index := r.index + 1;
             end if;
+            -- Channel zero's RoCE SOF and path item enter one ownership
+            -- register on the same edge.  Acceptance depends only on that
+            -- register being free, never on ARP or output readiness.
+            if IS_CLIENT_G and (v.pathActive = '0') and
+               (ibMasters(0).tValid = '1') and
+               (ssiGetUserSof(EMAC_AXIS_CONFIG_C, ibMasters(0)) = '1') and
+               (rocePathMetaValid = '1') then
+               v.ibSlaves(0).tReady := '1';
+               rocePathMetaReady    <= '1';
+               v.pathFirstBeat      := ibMasters(0);
+               v.pathMeta           := rocePathMetaData;
+               v.pathActive         := '1';
+               v.pathMac            := (others => '0');
+               v.pathSrcIp          := localIp;
+               v.pathSrcPort        := PORT_C(0);
+               v.pathDstPort        := remotePort(0);
+               if rocePathMetaData(56) = '1' then
+                  v.pathIp := rocePathMetaData(31 downto 0);
+               else
+                  v.pathIp := remoteIp(0);
+               end if;
+               if (localMac /= 0) and (localIp /= 0) and
+                  (PORT_G(0) /= 0) and (remotePort(0) /= 0) and
+                  (((rocePathMetaData(56) = '1') and
+                    (rocePathMetaData(31 downto 0) /= 0)) or
+                   ((rocePathMetaData(56) = '0') and (remoteIp(0) /= 0))) then
+                  v.pathConfigOk := '1';
+               else
+                  v.pathConfigOk := '0';
+               end if;
+               v.chPntr := 0;
+               v.state  := PATH_RESOLVE_S;
+            -- Do not start another frame while the preceding RoCE route is
+            -- still retained in the output pipeline.
+            elsif v.pathActive = '1' then
+               null;
             -- Check for DHCP data and remote MAC is non-zero
-            if (obDhcpMaster.tValid = '1') and (v.txMaster.tValid = '0') then
+            elsif (obDhcpMaster.tValid = '1') and (v.txMaster.tValid = '0') then
                -- Check for SOF
                if (ssiGetUserSof(EMAC_AXIS_CONFIG_C, obDhcpMaster) = '1') then
                   -- Write the first header
@@ -209,6 +290,86 @@ begin
                   v.chPntr             := r.index;
                   v.arpTabPos(r.index) := ibMasters(r.index).tDest;
                   v.state              := ACC_ARP_TAB_S;
+               end if;
+            end if;
+         ----------------------------------------------------------------------
+         when PATH_RESOLVE_S =>
+            -- Retain the accepted pair while the registered packet-local IP
+            -- drives the ARP table and request engine.  An IP-only cache entry
+            -- is not sufficient: both the matching IP and a nonzero MAC are
+            -- required before header generation can begin.
+            if (r.pathConfigOk = '0') and TX_FLOW_CTRL_G then
+               v.state := PATH_DROP_S;
+            elsif (arpTabFound(0) = '1') and
+                  (arpTabIpAddr(0) = r.pathIp) and
+                  (arpTabMacAddr(0) /= 0) then
+               v.pathMac := arpTabMacAddr(0);
+               v.state   := PATH_HEADER0_S;
+            end if;
+         ----------------------------------------------------------------------
+         when PATH_HEADER0_S =>
+            if v.txMaster.tValid = '0' then
+               v.txMaster.tValid               := '1';
+               v.txMaster.tData(47 downto 0)   := r.pathMac;
+               v.txMaster.tData(63 downto 48)  := x"0000";
+               v.txMaster.tData(95 downto 64)  := r.pathSrcIp;
+               v.txMaster.tData(127 downto 96) := r.pathIp;
+               if r.pathMeta(56) = '1' then
+                  v.txMaster.tData(55 downto 48) := r.pathMeta(39 downto 32);
+                  v.txMaster.tData(63 downto 56) := r.pathMeta(47 downto 40);
+                  v.txMaster.tUser(7)            := '1';
+               end if;
+               ssiSetUserSof(EMAC_AXIS_CONFIG_C, v.txMaster, '1');
+               v.state := PATH_HEADER1_S;
+            end if;
+         ----------------------------------------------------------------------
+         when PATH_HEADER1_S =>
+            if v.txMaster.tValid = '0' then
+               v.txMaster.tValid               := '1';
+               v.txMaster.tData(7 downto 0)    := x"00";
+               v.txMaster.tData(15 downto 8)   := UDP_C;
+               v.txMaster.tData(31 downto 16)  := x"0000";
+               v.txMaster.tData(47 downto 32)  := r.pathSrcPort;
+               v.txMaster.tData(63 downto 48)  := r.pathDstPort;
+               v.txMaster.tData(79 downto 64)  := x"0000";
+               v.txMaster.tData(95 downto 80)  := x"0000";
+               v.txMaster.tData(127 downto 96) := r.pathFirstBeat.tData(31 downto 0);
+               v.txMaster.tKeep(11 downto 0)   := x"FFF";
+               v.txMaster.tKeep(15 downto 12)  := r.pathFirstBeat.tKeep(3 downto 0);
+               v.tData(95 downto 0)            := r.pathFirstBeat.tData(127 downto 32);
+               v.tData(127 downto 96)          := (others => '0');
+               v.tKeep(11 downto 0)            := r.pathFirstBeat.tKeep(15 downto 4);
+               v.tKeep(15 downto 12)           := (others => '0');
+               v.tLast                         := r.pathFirstBeat.tLast;
+               v.eofe                          := ssiGetUserEofe(EMAC_AXIS_CONFIG_C, r.pathFirstBeat);
+               if v.tLast = '1' then
+                  if v.tKeep /= 0 then
+                     v.state := LAST_S;
+                  else
+                     v.txMaster.tLast := '1';
+                     ssiSetUserEofe(EMAC_AXIS_CONFIG_C, v.txMaster, v.eofe);
+                     v.state := IDLE_S;
+                  end if;
+               else
+                  v.state := BUFFER_S;
+               end if;
+            end if;
+         ----------------------------------------------------------------------
+         when PATH_DROP_S =>
+            if (r.pathFirstBeat.tLast = '1') or
+               (ssiGetUserEofe(EMAC_AXIS_CONFIG_C, r.pathFirstBeat) = '1') then
+               v.pathActive := '0';
+               v.pathMeta   := (others => '0');
+               v.pathIp     := (others => '0');
+               v.state      := IDLE_S;
+            elsif ibMasters(0).tValid = '1' then
+               v.ibSlaves(0).tReady := '1';
+               if (ibMasters(0).tLast = '1') or
+                  (ssiGetUserEofe(EMAC_AXIS_CONFIG_C, ibMasters(0)) = '1') then
+                  v.pathActive := '0';
+                  v.pathMeta   := (others => '0');
+                  v.pathIp     := (others => '0');
+                  v.state      := IDLE_S;
                end if;
             end if;
          -----------------------------------------------------------------------
@@ -447,6 +608,8 @@ begin
       txMaster    <= r.txMaster;
       linkUp      <= r.linkUp;
       arpTabPos   <= v.arpTabPos;
+      roceArpLookupValid <= r.pathActive;
+      roceArpLookupIp    <= r.pathIp;
 
       -- Reset
       if (RST_ASYNC_G = false and rst = RST_POLARITY_G) then
@@ -478,7 +641,9 @@ begin
          axisRst     => rst,
          sAxisMaster => txMaster,
          sAxisSlave  => txSlave,
-         mAxisMaster => obUdpMaster,
+         mAxisMaster => obUdpMasterInt,
          mAxisSlave  => obUdpSlave);
+
+   obUdpMaster <= obUdpMasterInt;
 
 end rtl;

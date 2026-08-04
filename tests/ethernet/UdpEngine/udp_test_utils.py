@@ -457,6 +457,8 @@ async def setup_udp_tx_bench(dut) -> UdpTxBench:
             "arpTabFound": 0,
             "arpTabIpAddr": 0,
             "arpTabMacAddr": 0,
+            "rocePathMetaValid": 0,
+            "rocePathMetaData": 0,
             "mUdpTReady": 0,
             "sDhcpTValid": 0,
             "sDhcpTData": 0,
@@ -490,6 +492,8 @@ async def setup_udp_top_bench(dut) -> UdpTopBench:
             "mServerTReady": 0,
             "mClientTReady": 0,
             "arpReqTReady": 0,
+            "rocePathMetaValid": 0,
+            "rocePathMetaData": 0,
         },
     )
     assert bench.source is not None

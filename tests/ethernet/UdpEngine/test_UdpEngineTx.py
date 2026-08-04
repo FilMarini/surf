@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import os
+
 import cocotb
 import pytest
 
@@ -29,12 +31,15 @@ from tests.ethernet.EthMacCore.ethmac_test_utils import (
     payload_from_beats,
     recv_frame,
     send_contiguous_frame,
+    cycle,
 )
 from tests.ethernet.UdpEngine.udp_test_utils import (
     DHCP_CLIENT_PORT,
     DHCP_SERVER_PORT,
     LEGACY_IPS,
+    LEGACY_IP_CFGS,
     LEGACY_MAC_WIRES,
+    LEGACY_MAC_CFGS,
     UDP_RTL_SOURCES,
     UDP_SERVER_PORT,
     build_udp_tx_pseudo_frame,
@@ -109,7 +114,76 @@ async def udp_engine_tx_dhcp_passthrough_test(dut):
     )
 
 
-@pytest.mark.parametrize("parameters", [pytest.param({}, id="udp_engine_tx_flat_wrapper")])
+@cocotb.test()
+async def udp_engine_tx_roce_pair_is_buffered_before_arp_test(dut):
+    if os.getenv("IS_CLIENT_G", "false").lower() != "true":
+        return
+
+    bench = await setup_udp_tx_bench(dut)
+    payload = b"latched-roce"
+    traffic_class = 0xA3
+    hop_limit = 0x17
+    path_meta = (
+        LEGACY_IP_CFGS[2]
+        | (traffic_class << 32)
+        | (hop_limit << 40)
+        | (1 << 56)
+    )
+
+    # Keep ARP unresolved and the output blocked.  The complete first payload
+    # beat and metadata must still be accepted into the paired ingress slot.
+    dut.mUdpTReady.value = 0
+    dut.rocePathMetaData.value = path_meta
+    dut.rocePathMetaValid.value = 1
+    await bench.source.send(frame_beats_from_bytes(payload)[0], clk=bench.clk)
+    dut.rocePathMetaValid.value = 0
+    dut.rocePathMetaData.value = 0
+    await cycle(bench.clk, 2)
+
+    assert int(dut.roceArpLookupValid.value) == 1
+    assert int(dut.roceArpLookupIp.value) == LEGACY_IP_CFGS[2]
+
+    # Mutating every upstream path input after acceptance must not alter the
+    # packet-owned route or first payload beat.
+    dut.remoteIp.value = LEGACY_IP_CFGS[3]
+    dut.remoteMac.value = LEGACY_MAC_CFGS[3]
+    await cycle(bench.clk, 2)
+    assert int(dut.roceArpLookupIp.value) == LEGACY_IP_CFGS[2]
+
+    dut.arpTabIpAddr.value = LEGACY_IP_CFGS[2]
+    dut.arpTabMacAddr.value = LEGACY_MAC_CFGS[2]
+    dut.arpTabFound.value = 1
+    observed = await recv_frame(
+        bench.sink,
+        clk=bench.clk,
+        ready_signal=dut.mUdpTReady,
+        timeout_cycles=64,
+    )
+
+    expected = bytearray(
+        build_udp_tx_pseudo_frame(
+            dst_mac=LEGACY_MAC_WIRES[2],
+            src_ip=LEGACY_IPS[0],
+            dst_ip=LEGACY_IPS[2],
+            src_port=UDP_SERVER_PORT,
+            dst_port=UDP_SERVER_PORT,
+            payload=payload,
+        )
+    )
+    expected[6] = traffic_class
+    expected[7] = hop_limit
+    assert payload_from_beats(observed) == bytes(expected)
+    await cycle(bench.clk, 2)
+    assert int(dut.roceArpLookupValid.value) == 0
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        pytest.param({"IS_CLIENT_G": False}, id="udp_engine_tx_server"),
+        pytest.param({"IS_CLIENT_G": True}, id="udp_engine_tx_client_roce"),
+    ],
+)
 def test_UdpEngineTx(parameters):
     run_surf_vhdl_test(
         test_file=__file__,

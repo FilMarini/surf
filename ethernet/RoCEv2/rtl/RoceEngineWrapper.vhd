@@ -123,6 +123,7 @@ entity RoceEngineWrapper is
       axilWriteSlave      : out AxiLiteWriteSlaveType;
       -- metadata completion interrupt (1-cycle pulse on DONE)
       mdDoneIrq           : out sl;
+      qpPathMeta          : out slv(MAX_QP_G*ROCE_TX_PATH_META_W_C-1 downto 0);
       -- per-QP CNP pulses from TransportLayer (consumed by RoCEv2AxiStreamRdma/DCQCN)
       cnp                 : out slv(MAX_QP_G-1 downto 0));
 end entity RoceEngineWrapper;
@@ -242,6 +243,7 @@ begin
          mdSrvRespValid  => mdSrvRespValid,
          mdSrvRespData   => mdSrvRespData,
          mdSrvRespReady  => mdSrvRespReady,
+         qpPathMeta      => qpPathMeta,
          mdDoneIrq       => mdDoneIrq);
 
    ---------------------------------------------------------------------------

@@ -52,12 +52,18 @@
 --   0x34C QP_MAX_SEND_SGE  [7:0]   0x350 QP_MAX_RECV_SGE  [7:0]
 --   0x354 QP_MAX_INLINE_DATA [7:0]
 --   0x358 QP_SQ_DRAINING   [0]
+--   0x360..0x36C QP_DGID   [127:0], little-word order (DGID0 is [31:0])
+--   0x370 QP_TRAFFIC_CLASS [7:0]   0x374 QP_HOP_LIMIT [7:0]
+--   0x378 QP_SGID_INDEX    [7:0]
 --   --- Response bank (RO; captured on completion) ---
 --   0x400 RESP_STATUS     [0] success  [2:1] tag
 --   0x404 RESP_PD_HANDLER [31:0]
 --   0x408 RESP_PD_KEY     [30:0]
 --   0x40C RESP_MR_LKEY    [31:0]   0x410 RESP_MR_RKEY [31:0]
 --   0x414 RESP_QP_QPN     [23:0]
+--   0x418..0x424 RESP_QP_DGID [127:0]
+--   0x428 RESP_QP_PATH [7:0] trafficClass [15:8] hopLimit
+--                       [23:16] sgidIndex [24] overrideValid
 --
 -- Protocol: program the bank for REQ_TYPE, write CONTROL with GO=1 (single
 -- write; GO self-clears). BUSY rises until the response is captured; DONE
@@ -65,6 +71,11 @@
 -- cycle. GO while BUSY is ignored and sets the sticky ERR bit. The MemRegion
 -- / qpAttr echo portions of RespMR/RespQP are intentionally not exposed (the
 -- driver wrote them); RESP_* covers the allocated handles/keys/qpn + success.
+-- VERSION 2 adds the RoCEv2 path bank.  The original 303/276-bit generated
+-- metadata ABI remains unchanged; this bridge validates INIT-to-RTR before
+-- forwarding it and maintains the distinct per-QP path schema used only by
+-- the RoCE TX sideband.  Invalid/non-IPv4-mapped DGIDs are completed locally
+-- with success=0, so the generated QP controller never sees the transition.
 -------------------------------------------------------------------------------
 -- This file is part of 'SLAC Firmware Standard Library'.
 -- It is subject to the license terms in the LICENSE.txt file found in the
@@ -90,7 +101,7 @@ entity RoceMetaDataAxil is
       RST_POLARITY_G : sl              := '1';  -- '1' active HIGH reset, '0' active LOW
       RST_ASYNC_G    : boolean         := false;
       MAX_QP_G       : positive        := 4;    -- reported in VERSION only
-      VERSION_G      : slv(7 downto 0) := x"01");
+      VERSION_G      : slv(7 downto 0) := x"02");
    port (
       clk             : in  sl;
       rst             : in  sl := not RST_POLARITY_G;
@@ -106,11 +117,19 @@ entity RoceMetaDataAxil is
       mdSrvRespValid  : in  sl;
       mdSrvRespData   : in  slv(ROCE_MD_RESP_W_C-1 downto 0);
       mdSrvRespReady  : out sl;
+      -- Per-QP packet-local path context, packed as MAX_QP_G consecutive
+      -- ROCE_TX_PATH_META_W_C-bit entries (QP 0 in the least-significant
+      -- slice).  Consumed only by the RoCE TX wrapper.
+      qpPathMeta      : out slv(MAX_QP_G*ROCE_TX_PATH_META_W_C-1 downto 0);
       -- completion interrupt (1-cycle pulse when DONE sets)
       mdDoneIrq       : out sl);
 end entity RoceMetaDataAxil;
 
 architecture rtl of RoceMetaDataAxil is
+
+   type PathMetaArray is array (natural range <>) of
+      slv(ROCE_TX_PATH_META_W_C-1 downto 0);
+   type PathDgidArray is array (natural range <>) of slv(127 downto 0);
 
    constant VERSION_C : slv(31 downto 0) :=
       x"0000" & toSlv(MAX_QP_G, 8) & VERSION_G;
@@ -173,6 +192,17 @@ architecture rtl of RoceMetaDataAxil is
       qpMaxRecvSge   : slv(7 downto 0);
       qpMaxInlineData : slv(7 downto 0);
       qpSqDraining   : sl;
+      qpDgid         : slv(127 downto 0);
+      qpTrafficClass : slv(7 downto 0);
+      qpHopLimit     : slv(7 downto 0);
+      qpSgidIndex    : slv(7 downto 0);
+      pathMeta       : PathMetaArray(MAX_QP_G-1 downto 0);
+      pathDgid       : PathDgidArray(MAX_QP_G-1 downto 0);
+      issuedQpn      : slv(23 downto 0);
+      issuedReqType  : slv(1 downto 0);
+      issuedDgid     : slv(127 downto 0);
+      issuedPathMeta : slv(ROCE_TX_PATH_META_W_C-1 downto 0);
+      issuedPathUpdate : sl;
       -- response bank (RO)
       respTag        : slv(1 downto 0);
       respSuccess    : sl;
@@ -181,6 +211,8 @@ architecture rtl of RoceMetaDataAxil is
       respMrLkey     : slv(31 downto 0);
       respMrRkey     : slv(31 downto 0);
       respQpQpn      : slv(23 downto 0);
+      respQpDgid     : slv(127 downto 0);
+      respQpPath     : slv(31 downto 0);
       -- mdSrv request face (registered)
       mdReqValid     : sl;
       mdReqData      : slv(ROCE_MD_REQ_W_C-1 downto 0);
@@ -235,6 +267,17 @@ architecture rtl of RoceMetaDataAxil is
       qpMaxRecvSge   => (others => '0'),
       qpMaxInlineData => (others => '0'),
       qpSqDraining   => '0',
+      qpDgid         => (others => '0'),
+      qpTrafficClass => (others => '0'),
+      qpHopLimit     => x"20",
+      qpSgidIndex    => (others => '0'),
+      pathMeta       => (others => (others => '0')),
+      pathDgid       => (others => (others => '0')),
+      issuedQpn      => (others => '0'),
+      issuedReqType  => (others => '0'),
+      issuedDgid     => (others => '0'),
+      issuedPathMeta => (others => '0'),
+      issuedPathUpdate => '0',
       respTag        => (others => '0'),
       respSuccess    => '0',
       respPdHandler  => (others => '0'),
@@ -242,6 +285,8 @@ architecture rtl of RoceMetaDataAxil is
       respMrLkey     => (others => '0'),
       respMrRkey     => (others => '0'),
       respQpQpn      => (others => '0'),
+      respQpDgid     => (others => '0'),
+      respQpPath     => (others => '0'),
       mdReqValid     => '0',
       mdReqData      => (others => '0'));
 
@@ -256,12 +301,16 @@ begin
       variable axilEp : AxiLiteEndpointType;
       variable go     : sl;
       variable busy   : sl;
+      variable pathMetaV : slv(ROCE_TX_PATH_META_W_C-1 downto 0);
+      variable pathValid : sl;
+      variable qpIdx     : natural range 0 to MAX_QP_G-1;
    begin
       v := r;
 
       -- self-clearing strobes
       go    := '0';
       v.irq := '0';
+      pathValid := '1';
 
       busy := toSl(r.state /= IDLE_S);
 
@@ -324,6 +373,10 @@ begin
       axiSlaveRegister (axilEp, x"350", 0, v.qpMaxRecvSge);
       axiSlaveRegister (axilEp, x"354", 0, v.qpMaxInlineData);
       axiSlaveRegister (axilEp, x"358", 0, v.qpSqDraining);
+      axiSlaveRegister (axilEp, x"360", 0, v.qpDgid);
+      axiSlaveRegister (axilEp, x"370", 0, v.qpTrafficClass);
+      axiSlaveRegister (axilEp, x"374", 0, v.qpHopLimit);
+      axiSlaveRegister (axilEp, x"378", 0, v.qpSgidIndex);
       -- response bank (RO)
       axiSlaveRegisterR(axilEp, x"400", 0, r.respSuccess);
       axiSlaveRegisterR(axilEp, x"400", 1, r.respTag);
@@ -332,6 +385,8 @@ begin
       axiSlaveRegisterR(axilEp, x"40C", 0, r.respMrLkey);
       axiSlaveRegisterR(axilEp, x"410", 0, r.respMrRkey);
       axiSlaveRegisterR(axilEp, x"414", 0, r.respQpQpn);
+      axiSlaveRegisterR(axilEp, x"418", 0, r.respQpDgid);
+      axiSlaveRegisterR(axilEp, x"428", 0, r.respQpPath);
 
       axiSlaveDefault(axilEp, v.axilWriteSlave, v.axilReadSlave, AXI_RESP_DECERR_C);
 
@@ -355,7 +410,34 @@ begin
                                     r.mrPdHandler & r.mrLkeyPart & r.mrRkeyPart &
                                     r.mrLkeyOrNot & r.mrLkey & r.mrRkey;
                   when ROCE_MD_TAG_QP_C =>
-                     v.mdReqData := ROCE_MD_TAG_QP_C &
+                     pathValid := toSl(r.qpDgid(127 downto 32) =
+                                      x"00000000000000000000FFFF" and
+                                      r.qpDgid(31 downto 0) /= x"00000000");
+                     pathMetaV := (others => '0');
+                     pathMetaV(31 downto 0)  := r.qpDgid(31 downto 0);
+                     pathMetaV(39 downto 32) := r.qpTrafficClass;
+                     pathMetaV(47 downto 40) := r.qpHopLimit;
+                     pathMetaV(55 downto 48) := r.qpSgidIndex;
+                     pathMetaV(56)           := pathValid;
+                     v.issuedQpn              := r.qpQpn;
+                     v.issuedReqType          := r.qpReqType;
+                     v.issuedDgid             := r.qpDgid;
+                     v.issuedPathMeta         := pathMetaV;
+                     v.issuedPathUpdate       := toSl(r.qpReqType = "10" and
+                                                       r.qpState = x"2");
+                     -- INIT -> RTR is rejected locally for an absent, zero,
+                     -- or native-IPv6 DGID.  The core request is not issued,
+                     -- therefore the QP state cannot advance on failure.
+                     if (v.issuedPathUpdate = '1') and (pathValid = '0') then
+                        v.respTag     := ROCE_MD_TAG_QP_C;
+                        v.respSuccess := '0';
+                        v.respQpQpn   := r.qpQpn;
+                        v.done        := '1';
+                        v.irq         := '1';
+                        v.mdReqValid  := '0';
+                        v.state       := IDLE_S;
+                     else
+                        v.mdReqData := ROCE_MD_TAG_QP_C &
                                     r.qpReqType & r.qpPdHandler & r.qpQpn &
                                     r.qpAttrMask &
                                     r.qpState & r.qpCurState & r.qpPmtu &
@@ -369,12 +451,16 @@ begin
                                     r.qpMinRnrTimer & r.qpTimeout &
                                     r.qpRetryCnt & r.qpRnrRetry &
                                     r.qpType & r.qpSqSigAll;
+                     end if;
                   when others =>        -- ROCE_MD_TAG_PD_C
                      v.mdReqData := ROCE_MD_TAG_PD_C & toSlv(0, 237) &
                                     r.pdAlloc & r.pdKey & r.pdHandler;
                end case;
-               v.mdReqValid := '1';
-               v.state      := SEND_S;
+               if not (v.reqType = ROCE_MD_TAG_QP_C and
+                       v.issuedPathUpdate = '1' and pathValid = '0') then
+                  v.mdReqValid := '1';
+                  v.state      := SEND_S;
+               end if;
             end if;
          ---------------------------------------------------------------------
          when SEND_S =>
@@ -401,6 +487,32 @@ begin
                   when ROCE_MD_TAG_QP_C =>
                      v.respSuccess := mdSrvRespData(273);
                      v.respQpQpn   := mdSrvRespData(272 downto 249);
+                     qpIdx := 0;
+                     if MAX_QP_G > 1 then
+                        qpIdx := to_integer(unsigned(r.issuedQpn(23 downto
+                                  24-log2(MAX_QP_G))));
+                     end if;
+                     if (mdSrvRespData(273) = '1') and
+                        (r.issuedPathUpdate = '1') then
+                        v.pathMeta(qpIdx) := r.issuedPathMeta;
+                        v.pathDgid(qpIdx) := r.issuedDgid;
+                     elsif (mdSrvRespData(273) = '1') and
+                           (r.issuedReqType = "01") then
+                        v.pathMeta(qpIdx) := (others => '0');
+                        v.pathDgid(qpIdx) := (others => '0');
+                     end if;
+                     if r.issuedReqType = "11" then
+                        v.respQpDgid := r.pathDgid(qpIdx);
+                        pathMetaV := r.pathMeta(qpIdx);
+                     else
+                        v.respQpDgid := r.issuedDgid;
+                        pathMetaV := r.issuedPathMeta;
+                     end if;
+                     v.respQpPath := (others => '0');
+                     v.respQpPath(7 downto 0)   := pathMetaV(39 downto 32);
+                     v.respQpPath(15 downto 8)  := pathMetaV(47 downto 40);
+                     v.respQpPath(23 downto 16) := pathMetaV(55 downto 48);
+                     v.respQpPath(24)           := pathMetaV(56);
                   when others =>        -- ROCE_MD_TAG_PD_C
                      v.respSuccess   := mdSrvRespData(63);
                      v.respPdHandler := mdSrvRespData(62 downto 31);
@@ -428,6 +540,10 @@ begin
       -- edge where valid and ready are both high
       mdSrvRespReady <= toSl(r.state = WAIT_RESP_S);
       mdDoneIrq      <= r.irq;
+      for i in 0 to MAX_QP_G-1 loop
+         qpPathMeta((i+1)*ROCE_TX_PATH_META_W_C-1 downto
+                    i*ROCE_TX_PATH_META_W_C) <= r.pathMeta(i);
+      end loop;
    end process comb;
 
    seq : process (clk, rst) is

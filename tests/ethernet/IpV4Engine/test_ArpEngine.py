@@ -53,6 +53,7 @@ REMOTE_MAC_WIRE = 0x665544332211
 LOCAL_IP = "192.168.50.10"
 LOCAL_IP_CFG = ipv4_config_word(LOCAL_IP)
 REMOTE_IP = "192.168.50.11"
+SECOND_REMOTE_IP = "192.168.50.12"
 
 
 async def setup_arp_bench(dut):
@@ -136,6 +137,46 @@ async def arp_engine_remote_lookup_ack_test(dut):
     req_source.set_idle()
     await reply_send
     assert payload_from_beat(remote_ack)[:6] == REMOTE_MAC_WIRE.to_bytes(6, byteorder="big")
+
+
+@cocotb.test()
+async def arp_engine_changed_target_bypasses_retry_timer_test(dut):
+    bench, _, m_arp_sink, req_source, _ = await setup_arp_bench(dut)
+
+    first_lookup = frame_beats_from_bytes(ipv4_to_bytes(REMOTE_IP))[0]
+    req_source.drive(first_lookup)
+    first_request = await recv_frame(
+        m_arp_sink,
+        clk=bench.clk,
+        ready_signal=dut.mArpTReady,
+        timeout_cycles=256,
+    )
+    assert payload_from_beats(first_request) == build_arp_frame(
+        opcode=1,
+        sender_mac=LOCAL_MAC_WIRE,
+        sender_ip=LOCAL_IP,
+        target_mac=ARP_BROADCAST_MAC,
+        target_ip=REMOTE_IP,
+    )
+
+    # Change the held client request before the one-second retry timer for the
+    # first address expires.  A new target must not inherit that cooldown.
+    second_lookup = frame_beats_from_bytes(ipv4_to_bytes(SECOND_REMOTE_IP))[0]
+    req_source.drive(second_lookup)
+    second_request = await recv_frame(
+        m_arp_sink,
+        clk=bench.clk,
+        ready_signal=dut.mArpTReady,
+        timeout_cycles=256,
+    )
+    req_source.set_idle()
+    assert payload_from_beats(second_request) == build_arp_frame(
+        opcode=1,
+        sender_mac=LOCAL_MAC_WIRE,
+        sender_ip=LOCAL_IP,
+        target_mac=ARP_BROADCAST_MAC,
+        target_ip=SECOND_REMOTE_IP,
+    )
 
 
 @cocotb.test()
