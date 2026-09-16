@@ -116,6 +116,7 @@ begin
                      ipWrAddr, ipWrEn, macWrAddr, macWrEn, rst, wR) is
       variable v        : WrRegType;
       variable wrAddInt : integer;
+      variable ipMatch  : boolean;
    begin
       -- Latch the current value
       v := wR;
@@ -137,16 +138,33 @@ begin
 
       -- Write MAC to LUT
       if macWrEn = '1' then
+         -- An ARP refresh can arrive just after the old entry expires.  The
+         -- requester then supplies a MAC write without necessarily issuing a
+         -- new IP write first.  Locate a still-present IP entry when possible;
+         -- otherwise allocate at entryCount.  In both cases write the IP/MAC
+         -- pair atomically so a reply can never create a MAC-only entry.
          wrAddInt := conv_integer(wR.entryCount);
+         ipMatch  := false;
+         for i in 0 to ENTRIES_G-1 loop
+            if wR.ipLutTable(i) = ipWrAddr and uOr(ipWrAddr) /= '0' then
+               wrAddInt := i;
+               ipMatch  := true;
+               exit;
+            end if;
+         end loop;
          if wrAddInt < ENTRIES_G then
+            v.ipLutTable(wrAddInt)  := ipWrAddr;
             v.macLutTable(wrAddInt) := macWrAddr;
          end if;
 
-         -- Update write LUT pointer
-         if wr.entryCount < ENTRIES_G - 1 then
-            v.entryCount := wr.entryCount + 1;
-         else
-            v.entryCount := (others => '0');
+         -- A refresh updates an existing entry in place.  Advance the
+         -- allocation pointer only when consuming a new entry.
+         if not ipMatch then
+            if wR.entryCount < ENTRIES_G - 1 then
+               v.entryCount := wR.entryCount + 1;
+            else
+               v.entryCount := (others => '0');
+            end if;
          end if;
       end if;
 

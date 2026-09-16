@@ -595,7 +595,8 @@ class RoceMetaDataAxil(pr.Device):
         self.add(pr.RemoteVariable(
             name        = 'QpDgid',
             description = ('RoCEv2 destination GID. Initial hardware support requires an '
-                           'IPv4-mapped GID (::ffff:a.b.c.d); staged before INIT-to-RTR'),
+                           'IPv4-mapped GID staged before INIT-to-RTR. The low IPv4 word '
+                           'uses SURF byte order: a.b.c.d is 0xddccbbaa'),
             offset      = 0x360,
             bitSize     = 128,
             bitOffset   = 0,
