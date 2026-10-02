@@ -244,6 +244,12 @@ architecture rtl of RespHandleSq is
 
    signal r   : RegType := REG_INIT_C;
    signal rin : RegType;
+   -- The QP PMTU is configured before traffic starts.  A local registered copy
+   -- gives the response pipeline a replicable, nearby source instead of
+   -- routing the control register directly to hundreds of FIFO-input loads.
+   signal pmtuLocal : slv(2 downto 0) := (others => '0');
+   attribute max_fanout : integer;
+   attribute max_fanout of pmtuLocal : signal is 32;
 
    ---------------------------------------------------------------------------
    -- Enum encodings
@@ -996,7 +1002,7 @@ begin
    ---------------------------------------------------------------------------
    -- Combinatorial process
    ---------------------------------------------------------------------------
-   comb : process (r, rst, isReset, isRTS, isERR, isStableRTS, getPMTU,
+   comb : process (r, rst, isReset, isRTS, isERR, isStableRTS, pmtuLocal,
                    getSQPN, getNPSN, pendingWrValid, pendingWrData,
                    pendingWrDeqAllowed,
                    pktMetaValid, pktMetaData, payloadConReqReady,
@@ -1651,7 +1657,7 @@ begin
                if isOnlyOp(opc) or isFirstOp(opc) then
                   nAddr := pwr(477 downto 414);     -- wr.laddr
                else                                 -- mid / last
-                  nAddr := addrAddPsn(r.nextReadRespWriteAddr, x"000001", getPMTU);
+                  nAddr := addrAddPsn(r.nextReadRespWriteAddr, x"000001", pmtuLocal);
                end if;
                if (respAct = ACT_EXP_NORM_C) and (inErrState = false) then
                   v.nextReadRespWriteAddr := nAddr;
@@ -1677,11 +1683,11 @@ begin
                if isOnlyOp(opc) then
                   remLen := slv(unsigned(pwr(509 downto 478)) - resize(unsigned(pmd(648 downto 636)), 32));
                elsif isFirstOp(opc) then
-                  remLen := lenSubPsn(pwr(509 downto 478), x"000001", getPMTU);
+                  remLen := lenSubPsn(pwr(509 downto 478), x"000001", pmtuLocal);
                elsif isMidOp(opc) then
-                  remLen := lenSubPsn(r.remainingReadRespLen, x"000001", getPMTU);
+                  remLen := lenSubPsn(r.remainingReadRespLen, x"000001", pmtuLocal);
                else  -- last
-                  remLen := lenSubPktLen(r.remainingReadRespLen, pmd(648 downto 636), getPMTU);
+                  remLen := lenSubPktLen(r.remainingReadRespLen, pmd(648 downto 636), pmtuLocal);
                end if;
                if (respAct = ACT_EXP_NORM_C) and (inErrState = false) then
                   v.remainingReadRespLen := remLen;
@@ -1709,13 +1715,13 @@ begin
             rlcr(97) := '1'; rlcr(96) := '0';
             if rpi(4) = '1' then
                if isOnlyOp(opc) then
-                  if lenGtEqPktLen(pwr(509 downto 478), pmd(648 downto 636), getPMTU) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
+                  if lenGtEqPktLen(pwr(509 downto 478), pmd(648 downto 636), pmtuLocal) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
                elsif isFirstOp(opc) then
-                  if lenGtEqPMTU(pwr(509 downto 478), getPMTU) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
+                  if lenGtEqPMTU(pwr(509 downto 478), pmtuLocal) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
                elsif isMidOp(opc) then
-                  if lenGtEqPMTU(preRem, getPMTU) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
+                  if lenGtEqPMTU(preRem, pmtuLocal) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
                else  -- last
-                  if lenGtEqPktLen(preRem, pmd(648 downto 636), getPMTU) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
+                  if lenGtEqPktLen(preRem, pmd(648 downto 636), pmtuLocal) then rlcr(97) := '1'; else rlcr(97) := '0'; end if;
                   rlcr(96) := pmd(627);           -- isLastPayloadLenZero = isZeroPayloadLen
                end if;
             end if;
@@ -1877,6 +1883,7 @@ begin
    begin
       if rising_edge(clk) then
          r <= rin;
+         pmtuLocal <= getPMTU;
       end if;
    end process seq;
 

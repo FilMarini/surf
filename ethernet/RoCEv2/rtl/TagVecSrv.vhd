@@ -133,6 +133,12 @@ architecture rtl of TagVecSrv is
 
    signal r   : RegType := REG_INIT_C;
    signal rin : RegType;
+   -- Capture the insert payload at request acceptance.  The FIFO output is a
+   -- poor source for the variable-indexed 128-entry register write: each bit
+   -- otherwise directly fans out to every possible entry.
+   signal insertValReg : slv(T_SZ_G-1 downto 0) := (others => '0');
+   attribute max_fanout : integer;
+   attribute max_fanout of insertValReg : signal is 32;
 
    -- SURF Fifo interface signals
    signal reqQValid    : sl;                              -- U_ReqQ.valid
@@ -207,7 +213,8 @@ begin
    -----------------------------------------------------------------------------
    -- Combinatorial process (two-process FSM): next state + outputs into v.
    -----------------------------------------------------------------------------
-   comb : process (r, rst, clearEn, reqQValid, reqQDout, respQNotFull) is
+   comb : process (r, rst, clearEn, reqQValid, reqQDout, respQNotFull,
+                   insertValReg) is
       variable v : RegType;
       -- Request tuple fields (peeked from reqQ head)
       variable insertOrRemove : sl;
@@ -323,10 +330,10 @@ begin
                   severity error;
                -- pragma translate_on
                v.tagVec(to_integer(unsigned(insertIdx)))  := '1';
-               v.dataVec(to_integer(unsigned(insertIdx))) := insertVal;
+               v.dataVec(to_integer(unsigned(insertIdx))) := insertValReg;
             end if;
             vRespEnq         := '1';
-            vRespDin         := r.respSuccessReg & insertIdx & insertVal;
+            vRespDin         := r.respSuccessReg & insertIdx & insertValReg;
             v.tagVecStateReg := RECV_REQ_S;
          end if;
 
@@ -366,8 +373,16 @@ begin
    begin
       if (RST_ASYNC_G and rst = RST_POLARITY_G) then
          r <= REG_INIT_C after TPD_G;
+         insertValReg <= (others => '0') after TPD_G;
       elsif rising_edge(clk) then
          r <= rin after TPD_G;
+         if (RST_ASYNC_G = false and rst = RST_POLARITY_G) then
+            insertValReg <= (others => '0') after TPD_G;
+         elsif r.tagVecStateReg = RECV_REQ_S and reqQValid = '1' and
+               reqQDout(FIFO_WIDTH_C-1) = '1' then
+            insertValReg <=
+               reqQDout(FIFO_WIDTH_C-2 downto V_LOG_SZ_C) after TPD_G;
+         end if;
       end if;
    end process seq;
 
