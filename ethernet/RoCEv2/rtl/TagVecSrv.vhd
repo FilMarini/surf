@@ -8,6 +8,8 @@
 --   response FIFO. One request is in flight at a time; each insert/remove takes
 --   exactly two clock cycles (RECV_REQ -> RESP_*). A clear() pulse flushes both
 --   FIFOs and resets all tags.
+--   INDEX_WIDTH_G may exceed the physical table address width. Such indices
+--   have invalid lookups and failed removals; they never wrap into the table.
 --
 --   Generated from:
 --     BSV source : src-bsv/MetaData.bsv  (module mkTagVecSrv, lines 35-151)
@@ -58,20 +60,21 @@ entity TagVecSrv is
       RST_ASYNC_G    : boolean  := false;
       MEMORY_TYPE_G  : string   := "distributed";  -- small FIFOs
       V_SZ_G         : positive := 4;        -- number of tag entries (power of 2, >= 1)
+      INDEX_WIDTH_G  : positive := log2(V_SZ_G);  -- external index width
       T_SZ_G         : positive := 32);      -- data width per entry
    port (
       clk        : in  sl;
       rst        : in  sl := not RST_POLARITY_G;
       -- Request input (srvPort.request -> reqQ write side)
       reqValid   : in  sl;                   -- parent enqueues a request
-      reqData    : in  slv(T_SZ_G + log2(V_SZ_G) downto 0);  -- {insOrRem,insVal,remIdx}
+      reqData    : in  slv(T_SZ_G + INDEX_WIDTH_G downto 0);  -- {insOrRem,insVal,remIdx}
       reqReady   : out sl;                   -- reqQ not_full (backpressure)
       -- Response output (respQ read side -> srvPort.response)
       respValid  : out sl;                   -- respQ has a response
-      respData   : out slv(T_SZ_G + log2(V_SZ_G) downto 0);  -- {success,idx,value}
+      respData   : out slv(T_SZ_G + INDEX_WIDTH_G downto 0);  -- {success,idx,value}
       respReady  : in  sl;                   -- parent dequeues a response
       -- getItem() combinational lookup
-      getItemIdx : in  slv(log2(V_SZ_G)-1 downto 0);
+      getItemIdx : in  slv(INDEX_WIDTH_G-1 downto 0);
       getItemOut : out slv(T_SZ_G downto 0);  -- {valid, dataVec(idx)}
       -- Full tag-valid vector export (combinational = r.tagVec). Added per
       -- RESOLVED OQ-FSM-MDSRV-01 sec.4.2 so parents with multiple concurrent
@@ -92,8 +95,8 @@ architecture rtl of TagVecSrv is
    --   vLogSz  = TLog(vSz)        ; cntSz = TAdd(1, vLogSz)
    --   reqQ/respQ width = 1 + tSz + vLogSz (Tuple3 packing)
    -----------------------------------------------------------------------------
-   constant V_LOG_SZ_C  : integer := log2(V_SZ_G);          -- index bit width
-   constant CNT_SZ_C    : integer := V_LOG_SZ_C + 1;        -- item-count width
+   constant V_LOG_SZ_C  : integer := INDEX_WIDTH_G;         -- external index width
+   constant CNT_SZ_C    : integer := log2(V_SZ_G) + 1;      -- item-count width
    constant FIFO_WIDTH_C : integer := 1 + T_SZ_G + V_LOG_SZ_C;
    constant FIFO_ADDR_WIDTH_C : integer := 4;               -- surf.Fifo minimum
 
@@ -154,6 +157,10 @@ architecture rtl of TagVecSrv is
    signal rstActiveHigh : sl;
 
 begin
+
+   assert V_SZ_G <= 2**INDEX_WIDTH_G
+      report "TagVecSrv: index width cannot address every entry"
+      severity failure;
 
    -----------------------------------------------------------------------------
    -- Request FIFO (BSV reqQ : FIFOF#(Tuple3#(Bool, a, UInt#(vLogSz))))
@@ -307,7 +314,11 @@ begin
                v.tagVecStateReg := RESP_INSERT_S;
             else
                -- Remove: success iff the addressed slot is currently tagged
-               removeTag := r.tagVec(removeIdxInt);
+               if (removeIdxInt < V_SZ_G) then
+                  removeTag := r.tagVec(removeIdxInt);
+               else
+                  removeTag := '0';
+               end if;
                if (removeTag = '1') then
                   v.itemCnt  := slv(unsigned(r.itemCnt) - 1);
                   v.emptyReg := almostEmpty;
@@ -341,8 +352,11 @@ begin
          -- rule genRemoveResp (RESP_REMOVE_S)
          if (reqQValid = '1') and (respQNotFull = '1') then
             vReqDeq                  := '1';
-            removeVal                := r.dataVec(removeIdxInt);
-            v.tagVec(removeIdxInt)   := '0';
+            removeVal := (others => '0');
+            if (removeIdxInt < V_SZ_G) then
+               removeVal              := r.dataVec(removeIdxInt);
+               v.tagVec(removeIdxInt) := '0';
+            end if;
             vRespEnq                 := '1';
             vRespDin                 := r.respSuccessReg & removeIdx & removeVal;
             v.tagVecStateReg         := RECV_REQ_S;
@@ -392,7 +406,9 @@ begin
    notEmpty   <= not r.emptyReg;
    notFull    <= not r.fullReg;
    getItemOut <= r.tagVec(to_integer(unsigned(getItemIdx))) &
-                 r.dataVec(to_integer(unsigned(getItemIdx)));
+                 r.dataVec(to_integer(unsigned(getItemIdx)))
+                 when to_integer(unsigned(getItemIdx)) < V_SZ_G else
+                 (others => '0');
    tagValid   <= r.tagVec;
 
 end architecture rtl;

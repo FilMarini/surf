@@ -77,6 +77,7 @@ entity MetaDataPDs is
       RST_POLARITY_G    : sl       := '1';   -- '1' for active HIGH reset
       RST_ASYNC_G       : boolean  := false;
       MAX_PD_G          : positive := 2;   -- MAX_PD (Settings.bsv:20)
+      MAX_MR_PER_PD_G  : positive := 128;
       PD_HANDLE_WIDTH_G : positive := 32;  -- PD_HANDLE_WIDTH (DataTypes.bsv:28)
       MR_REGION_WIDTH_G : positive := 186);  -- SizeOf#(MemRegion)
    port (
@@ -237,7 +238,8 @@ begin
 
       U_PdMr : entity surf.MetaDataMRs
          generic map (
-            TPD_G => TPD_G)
+            TPD_G => TPD_G,
+            MAX_MR_PER_PD_G => MAX_MR_PER_PD_G)
          port map (
             clk          => clk,
             rst          => rst,

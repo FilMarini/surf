@@ -112,6 +112,7 @@ entity SqQueuePair is
       -- treats read/atomic responses as unknown (contract: software never
       -- posts READ/atomic work requests).
       EN_READ_G      : boolean := true;
+      WRITE_IMM_ONLY_G : boolean := false;
       -- Settings.bsv MAX_QP_WR (BSV default 32): pendingWorkReqBuf scan depth.
       -- Must match CntrlQp MAX_QP_WR_G and be a power of 2 (ScanFifoF Q_SZ_G).
       MAX_QP_WR_G    : positive := 4);
@@ -597,7 +598,8 @@ begin
    -----------------------------------------------------------------------------
    U_ReqGenSq : entity surf.ReqGenSq
       generic map (
-         TPD_G => TPD_G)
+         TPD_G => TPD_G,
+         WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G)
       port map (
          clk                       => clk,
          rst                       => rst,

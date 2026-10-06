@@ -43,6 +43,10 @@ entity RoCEv2AxiStreamRdma is
       EN_TX_G          : boolean          := true;
       EN_RX_G          : boolean          := true;
       EN_READ_G        : boolean          := true;
+      -- Select an RC WRITE_WITH_IMM-only data path and physical MR capacity.
+      -- Defaults retain the reusable engine's protocol and key behavior.
+      WRITE_IMM_ONLY_G : boolean          := false;
+      MAX_MR_PER_PD_G  : positive         := 128;
       DCQCN_EN_G       : boolean          := true;                    -- gate the per-QP DCQCN block
       DCQCN_BUCKET_SIZE_G : slv(31 downto 0) := x"00004000";          -- per-QP max burst credit (16 KiB)
       AXIL_BASE_ADDR_G : slv(31 downto 0) := (others => '0'));  -- absolute AXI-Lite base of this window
@@ -181,7 +185,9 @@ begin
          MAX_QP_WR_G    => MAX_QP_WR_G,
          EN_TX_G        => EN_TX_G,
          EN_RX_G        => EN_RX_G,
-         EN_READ_G      => EN_READ_G)
+         EN_READ_G      => EN_READ_G,
+         WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G,
+         MAX_MR_PER_PD_G  => MAX_MR_PER_PD_G)
       port map (
          clk                   => clk,
          rst                   => rst,

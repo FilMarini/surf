@@ -1612,16 +1612,16 @@ begin
       rdmaHdrRdEn    <= '0';
       payloadBufRdEn <= '0';
 
-      rdmaHeaderRecvQWrEn           <= '0'; rdmaHeaderRecvQRdEn <= '0'; rdmaHeaderRecvQDin <= (others                     => '0');
-      payloadRecvQWrEn              <= '0'; payloadRecvQRdEn <= '0'; payloadRecvQDin <= (others                           => '0');
+      rdmaHeaderRecvQWrEn           <= '0'; rdmaHeaderRecvQRdEn <= '0';
+      payloadRecvQWrEn              <= '0'; payloadRecvQRdEn <= '0'; payloadRecvQDin <= payloadBufDout;
       rdmaHeaderPreCheckQWrEn       <= '0'; rdmaHeaderPreCheckQRdEn <= '0'; rdmaHeaderPreCheckQDin <= (others             => '0');
-      payloadPreCheckQWrEn          <= '0'; payloadPreCheckQRdEn <= '0'; payloadPreCheckQDin <= (others                   => '0');
+      payloadPreCheckQWrEn          <= '0'; payloadPreCheckQRdEn <= '0'; payloadPreCheckQDin <= payloadRecvQDout;
       rdmaHeaderValidationQWrEn     <= '0'; rdmaHeaderValidationQRdEn <= '0'; rdmaHeaderValidationQDin <= (others         => '0');
-      payloadValidationQWrEn        <= '0'; payloadValidationQRdEn <= '0'; payloadValidationQDin <= (others               => '0');
+      payloadValidationQWrEn        <= '0'; payloadValidationQRdEn <= '0'; payloadValidationQDin <= payloadPreCheckQDout;
       rdmaHeaderFilterQWrEn         <= '0'; rdmaHeaderFilterQRdEn <= '0'; rdmaHeaderFilterQDin <= (others                 => '0');
-      payloadFilterQWrEn            <= '0'; payloadFilterQRdEn <= '0'; payloadFilterQDin <= (others                       => '0');
+      payloadFilterQWrEn            <= '0'; payloadFilterQRdEn <= '0'; payloadFilterQDin <= payloadValidationQDout;
       rdmaHeaderFragLenCalcQWrEn    <= '0'; rdmaHeaderFragLenCalcQRdEn <= '0'; rdmaHeaderFragLenCalcQDin <= (others       => '0');
-      payloadFragLenCalcQWrEn       <= '0'; payloadFragLenCalcQRdEn <= '0'; payloadFragLenCalcQDin <= (others             => '0');
+      payloadFragLenCalcQWrEn       <= '0'; payloadFragLenCalcQRdEn <= '0'; payloadFragLenCalcQDin <= payloadFilterQDout;
       rdmaHeaderPktLenCalcQWrEn     <= '0'; rdmaHeaderPktLenCalcQRdEn <= '0'; rdmaHeaderPktLenCalcQDin <= (others         => '0');
       payloadPktLenCalcQWrEn        <= '0'; payloadPktLenCalcQRdEn <= '0'; payloadPktLenCalcQDin <= (others               => '0');
       rdmaHeaderPktLenPreCheckQWrEn <= '0'; rdmaHeaderPktLenPreCheckQRdEn <= '0'; rdmaHeaderPktLenPreCheckQDin <= (others => '0');
@@ -1689,6 +1689,7 @@ begin
       else
          nonPayOk := '0';
       end if;
+      rdmaHeaderRecvQDin <= rHdr & rBth & bthChk & hdrChk & nonPayOk;
 
       -- canFire: buffer notEmpty AND payloadRecvQ notFull; on isFirst also header
       -- pipe notEmpty AND rdmaHeaderRecvQ notFull.
@@ -1699,11 +1700,9 @@ begin
       if canFire then
          payloadBufRdEn   <= '1';
          payloadRecvQWrEn <= '1';
-         payloadRecvQDin  <= frag;
          if isFirst = '1' then
             rdmaHdrRdEn         <= '1';
             rdmaHeaderRecvQWrEn <= '1';
-            rdmaHeaderRecvQDin  <= rHdr & rBth & bthChk & hdrChk & nonPayOk;
          end if;
       end if;
 
@@ -1732,7 +1731,6 @@ begin
                   rdmaHeaderPreCheckQWrEn <= '1';
                   rdmaHeaderPreCheckQDin  <= rHdr & rBth;
                   payloadPreCheckQWrEn    <= '1';
-                  payloadPreCheckQDin     <= frag;
                end if;
             else
                -- invalid header: drop header+frag; multi-frag → enter DISCARD
@@ -1751,7 +1749,6 @@ begin
             if canFire then
                payloadRecvQRdEn     <= '1';
                payloadPreCheckQWrEn <= '1';
-               payloadPreCheckQDin  <= frag;
             end if;
          end if;
       end if;
@@ -1797,14 +1794,12 @@ begin
             rdmaHeaderValidationQWrEn <= '1';
             rdmaHeaderValidationQDin  <= pcHdr & pcBth & hvi;
             payloadValidationQWrEn    <= '1';
-            payloadValidationQDin     <= frag;
          end if;
       else
          canFire := (payloadPreCheckQValid = '1') and (payloadValidationQNotFull = '1');
          if canFire then
             payloadPreCheckQRdEn   <= '1';
             payloadValidationQWrEn <= '1';
-            payloadValidationQDin  <= frag;
          end if;
       end if;
 
@@ -1855,14 +1850,12 @@ begin
             rdmaHeaderFilterQWrEn     <= '1';
             rdmaHeaderFilterQDin      <= vHdr & vBth & vhInfo;
             payloadFilterQWrEn        <= '1';
-            payloadFilterQDin         <= frag;
          end if;
       else
          canFire := (payloadValidationQValid = '1') and (payloadFilterQNotFull = '1');
          if canFire then
             payloadValidationQRdEn <= '1';
             payloadFilterQWrEn     <= '1';
-            payloadFilterQDin      <= frag;
          end if;
       end if;
 
@@ -1907,7 +1900,6 @@ begin
          end if;
          if needPay then
             payloadFragLenCalcQWrEn <= '1';
-            payloadFragLenCalcQDin  <= frag;
          end if;
       end if;
 

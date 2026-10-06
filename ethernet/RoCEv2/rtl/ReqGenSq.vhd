@@ -91,7 +91,8 @@ use surf.StdRtlPkg.all;
 
 entity ReqGenSq is
    generic (
-      TPD_G : time := 1 ns);
+      TPD_G            : time    := 1 ns;
+      WRITE_IMM_ONLY_G : boolean := false);
    port (
       clk : in sl;
       rst : in sl;                      -- active-high synchronous reset (FPGA)
@@ -303,6 +304,7 @@ architecture rtl of ReqGenSq is
 
    -- U_HeaderGenReqSQ interconnect (driven from reqHeaderPrepareQ.dout)
    signal hpPwr           : slv(678 downto 0);  -- ReqPktHeaderInfo.pendingWR
+   signal hgOpcode        : slv(3 downto 0);
    signal hgIsFirstOrOnly : sl;
    signal hgIsOnlyOrLast  : sl;
    signal hgHeaderValid   : sl;
@@ -583,6 +585,7 @@ begin
    -- HeaderGenReqSQ is combinational; its inputs are the reqHeaderPrepareQ head
    -- (ReqPktHeaderInfo + cntrlStatus bundle).  Driven concurrently below.
    hpPwr           <= reqPrepDout(685 downto 7);  -- ReqPktHeaderInfo.pendingWR
+   hgOpcode        <= WR_WRITE_IMM_C when WRITE_IMM_ONLY_G else hpPwr(614 downto 611);
    hgIsFirstOrOnly <= reqPrepDout(6);             -- isFirstReqPkt
    -- isOnlyOrLast = isFirstReqPkt ? isOnlyReqPkt(pendingWR val) : isLastReqPkt
    hgIsOnlyOrLast  <= reqPrepDout(7) when reqPrepDout(6) = '1' else reqPrepDout(5);
@@ -599,7 +602,7 @@ begin
          sigAll        => sigAll,
          commDqpn      => dqpn,
          sqpn          => sqpn,
-         opcode        => hpPwr(614 downto 611),
+         opcode        => hgOpcode,
          solicited     => hpPwr(357),
          sendSignaled  => hpPwr(607),   -- flags(1)=IBV_SEND_SIGNALED
          len           => hpPwr(509 downto 478),
@@ -778,7 +781,8 @@ begin
       r1Len    := pendingWorkReqInData(509 downto 478);
       r1IsRC   := ite(qpType = QPT_RC_C or qpType = QPT_XRC_SEND_C, '1', '0');
       r1IsUD   := ite(qpType = QPT_UD_C, '1', '0');
-      r1NeedDma := ite((r1Opcode = WR_RDMA_WRITE_C or r1Opcode = WR_WRITE_IMM_C or
+      r1NeedDma := ite((not WRITE_IMM_ONLY_G or r1Opcode = WR_WRITE_IMM_C) and
+                       (r1Opcode = WR_RDMA_WRITE_C or r1Opcode = WR_WRITE_IMM_C or
                         r1Opcode = WR_SEND_C or r1Opcode = WR_SEND_IMM_C or
                         r1Opcode = WR_SEND_INV_C) and r1Len /= x"00000000", '1', '0');
       r1IsNew := not pendingWorkReqInData(1);  -- !isValid(isOnlyReqPkt)
@@ -810,6 +814,15 @@ begin
             r1TmpPkt(19 downto 0)  := r1Len(31 downto 12);
             r1Residue(11 downto 0) := r1Len(11 downto 0);
       end case;
+
+      -- An unsupported WR still passes through the normal local-error
+      -- completion path. Limit its speculative packet count to one so no
+      -- later packet remains in reqCntQ when the QP enters the error state.
+      if WRITE_IMM_ONLY_G and
+         (qpType /= QPT_RC_C or r1Opcode /= WR_WRITE_IMM_C) then
+         r1TmpPkt  := toSlv(1, r1TmpPkt'length);
+         r1Residue := (others => '0');
+      end if;
 
       r1Guard := notReset and (isStableRTS or isERR) and pendingWorkReqInValid;
       r1Fire  := r1Guard and (not r1ShouldDeq or wrPgNotFull);
@@ -900,7 +913,8 @@ begin
          r4NextPsn   := r4NextPsn25(23 downto 0);
          r4EndPsn    := slv(unsigned(r4NextPsn) - 1);
       end if;
-      r4HasOnly := r4IsOnly or ite(r4Opcode = WR_RDMA_READ_C, '1', '0');
+      r4HasOnly := r4IsOnly or ite(not WRITE_IMM_ONLY_G and
+                                  r4Opcode = WR_RDMA_READ_C, '1', '0');
 
       if (r4IsNew = '1') then
          r4Pwr(77)           := '1';    -- startPSN := Valid startPSN
@@ -1065,7 +1079,13 @@ begin
       r10HasHdr  := hdrGenDout(620);
       r10HasResp := hdrGenDout(26);
       r10RespErr := hdrGenDout(24);
-      r10Success := r10HasHdr and (not r10HasResp or not r10RespErr);
+      -- The original work request is kept in hdrGenQ. Unsupported requests
+      -- take the existing local-QP-operation-error completion path and never
+      -- release the speculative header onto the wire.
+      r10Success := r10HasHdr and (not r10HasResp or not r10RespErr) and
+                    ite(not WRITE_IMM_ONLY_G or
+                        (qpType = QPT_RC_C and
+                         hdrGenDout(1235 downto 1232) = WR_WRITE_IMM_C), '1', '0');
       if (r10Success = '1') then
          r10Cond := reqHdrOutNotFull and psnOutNotFull;
       else

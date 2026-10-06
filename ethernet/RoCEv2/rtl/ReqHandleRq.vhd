@@ -99,6 +99,7 @@ entity ReqHandleRq is
       -- existing unsupported-opcode NAK-INV_REQ path and the read/atomic
       -- serving datapath (dup cache, payload gen, atomic srv) constant-folds.
       EN_READ_G : boolean := true;
+      WRITE_IMM_ONLY_G : boolean := false;
       -- Settings.bsv MAX_QP_WR (BSV default 32); must match CntrlQp MAX_QP_WR_G
       MAX_QP_WR_G : positive := 4);
    port (
@@ -396,12 +397,16 @@ architecture rtl of ReqHandleRq is
    function isSendReqOp (op : slv(4 downto 0)) return boolean is
       variable u : integer := opInt(op);
    begin
-      return (u=0) or (u=1) or (u=2) or (u=3) or (u=4) or (u=5) or (u=22) or (u=23);
+      return (not WRITE_IMM_ONLY_G) and
+             ((u=0) or (u=1) or (u=2) or (u=3) or (u=4) or (u=5) or (u=22) or (u=23));
    end function;
 
    function isWriteReqOp (op : slv(4 downto 0)) return boolean is
       variable u : integer := opInt(op);
    begin
+      if WRITE_IMM_ONLY_G then
+         return (u=6) or (u=7) or (u=9) or (u=11);
+      end if;
       return (u=6) or (u=7) or (u=8) or (u=9) or (u=10) or (u=11);
    end function;
 
@@ -464,6 +469,9 @@ architecture rtl of ReqHandleRq is
    -- isSupportedReqOpCodeRQ(qpt, opcode)
    function isSupportedReqOp (qpt : slv(3 downto 0); op : slv(4 downto 0)) return boolean is
    begin
+      if WRITE_IMM_ONLY_G then
+         return (qpt = QPT_RC_C) and isWriteReqOp(op);
+      end if;
       if (qpt = QPT_UC_C) then
          -- UC: SEND_{FIRST..ONLY_IMM}={0..5} (excludes *_WITH_INVALIDATE) or WRITE_*
          return (opInt(op) <= 5) or isWriteReqOp(op);
@@ -1887,40 +1895,72 @@ begin
       v := r;
 
       ---------------------------------------------------------------------
-      -- Default drives (Moore: everything computed into v / driven low)
+      -- Default controls are low. Pass unchanged metadata directly from each
+      -- source FIFO; only fields modified by a firing stage need selection.
       ---------------------------------------------------------------------
       f01WrEn <= '0'; f01RdEn <= '0'; f01Din <= (others => '0');
-      f02WrEn <= '0'; f02RdEn <= '0'; f02Din <= (others => '0');
-      f03WrEn <= '0'; f03RdEn <= '0'; f03Din <= (others => '0');
-      f04WrEn <= '0'; f04RdEn <= '0'; f04Din <= (others => '0');
-      f05WrEn <= '0'; f05RdEn <= '0'; f05Din <= (others => '0');
-      f06WrEn <= '0'; f06RdEn <= '0'; f06Din <= (others => '0');
-      f07WrEn <= '0'; f07RdEn <= '0'; f07Din <= (others => '0');
-      f08WrEn <= '0'; f08RdEn <= '0'; f08Din <= (others => '0');
-      f09WrEn <= '0'; f09RdEn <= '0'; f09Din <= (others => '0');
-      f10WrEn <= '0'; f10RdEn <= '0'; f10Din <= (others => '0');
-      f11WrEn <= '0'; f11RdEn <= '0'; f11Din <= (others => '0');
-      f12WrEn <= '0'; f12RdEn <= '0'; f12Din <= (others => '0');
-      f13WrEn <= '0'; f13RdEn <= '0'; f13Din <= (others => '0');
-      f14WrEn <= '0'; f14RdEn <= '0'; f14Din <= (others => '0');
-      f15WrEn <= '0'; f15RdEn <= '0'; f15Din <= (others => '0');
-      f16WrEn <= '0'; f16RdEn <= '0'; f16Din <= (others => '0');
-      f17WrEn <= '0'; f17RdEn <= '0'; f17Din <= (others => '0');
-      f18WrEn <= '0'; f18RdEn <= '0'; f18Din <= (others => '0');
-      f19WrEn <= '0'; f19RdEn <= '0'; f19Din <= (others => '0');
-      f20WrEn <= '0'; f20RdEn <= '0'; f20Din <= (others => '0');
-      f21WrEn <= '0'; f21RdEn <= '0'; f21Din <= (others => '0');
-      f22WrEn <= '0'; f22RdEn <= '0'; f22Din <= (others => '0');
-      f23WrEn <= '0'; f23RdEn <= '0'; f23Din <= (others => '0');
-      f24WrEn <= '0'; f24RdEn <= '0'; f24Din <= (others => '0');
-      f25WrEn <= '0'; f25RdEn <= '0'; f25Din <= (others => '0');
-      f26WrEn <= '0'; f26RdEn <= '0'; f26Din <= (others => '0');
-      f27WrEn <= '0'; f27RdEn <= '0'; f27Din <= (others => '0');
-      f28WrEn <= '0'; f28RdEn <= '0'; f28Din <= (others => '0');
-      f29WrEn <= '0'; f29RdEn <= '0'; f29Din <= (others => '0');
-      f30WrEn <= '0'; f30RdEn <= '0'; f30Din <= (others => '0');
-      f31WrEn <= '0'; f31RdEn <= '0'; f31Din <= (others => '0');
-      f32WrEn <= '0'; f32RdEn <= '0'; f32Din <= (others => '0');
+      f02WrEn <= '0'; f02RdEn <= '0';
+      f02Din <= f01Dout(837 downto 189) & (W02_C-649-1 downto 0 => '0');
+      f03WrEn <= '0'; f03RdEn <= '0';
+      f03Din <= f02Dout(813 downto 165) & (W03_C-649-1 downto 0 => '0');
+      f04WrEn <= '0'; f04RdEn <= '0';
+      f04Din <= f03Dout(818 downto 170) & (W04_C-649-1 downto 0 => '0');
+      f05WrEn <= '0'; f05RdEn <= '0';
+      f05Din <= f04Dout(1035 downto 387) & (W05_C-649-1 downto 0 => '0');
+      f06WrEn <= '0'; f06RdEn <= '0';
+      f06Din <= f05Dout(1030 downto 382) & (W06_C-649-1 downto 0 => '0');
+      f07WrEn <= '0'; f07RdEn <= '0';
+      f07Din <= f06Dout(1030 downto 382) & (W07_C-649-1 downto 0 => '0');
+      f08WrEn <= '0'; f08RdEn <= '0';
+      f08Din <= f07Dout(1425 downto 777) & (W08_C-649-1 downto 0 => '0');
+      f09WrEn <= '0'; f09RdEn <= '0';
+      f09Din <= f08Dout(1208 downto 560) & (W09_C-649-1 downto 0 => '0');
+      f10WrEn <= '0'; f10RdEn <= '0';
+      f10Din <= f09Dout(1209 downto 561) & (W10_C-649-1 downto 0 => '0');
+      f11WrEn <= '0'; f11RdEn <= '0';
+      f11Din <= f10Dout;
+      f12WrEn <= '0'; f12RdEn <= '0';
+      f12Din <= f11Dout & (W12_C-W11_C-1 downto 0 => '0');
+      f13WrEn <= '0'; f13RdEn <= '0';
+      f13Din <= f12Dout(1209 downto 561) & (W13_C-649-1 downto 0 => '0');
+      f14WrEn <= '0'; f14RdEn <= '0';
+      f14Din <= f13Dout & (W14_C-W13_C-1 downto 0 => '0');
+      f15WrEn <= '0'; f15RdEn <= '0';
+      f15Din <= f14Dout & (W15_C-W14_C-1 downto 0 => '0');
+      f16WrEn <= '0'; f16RdEn <= '0';
+      f16Din <= f15Dout(1209 downto 32) & (W16_C-1178-1 downto 0 => '0');
+      f17WrEn <= '0'; f17RdEn <= '0';
+      f17Din <= f16Dout(1181 downto 101) & (W17_C-1081-1 downto 0 => '0');
+      f18WrEn <= '0'; f18RdEn <= '0';
+      f18Din <= f17Dout(1211 downto 563) & (W18_C-649-1 downto 0 => '0');
+      f19WrEn <= '0'; f19RdEn <= '0';
+      f19Din <= f18Dout(1145 downto 65) & (W19_C-1081-1 downto 0 => '0');
+      f20WrEn <= '0'; f20RdEn <= '0';
+      f20Din <= f19Dout(1082 downto 2) & (W20_C-1081-1 downto 0 => '0');
+      f21WrEn <= '0'; f21RdEn <= '0';
+      f21Din <= f20Dout(1153 downto 73) & (W21_C-1081-1 downto 0 => '0');
+      f22WrEn <= '0'; f22RdEn <= '0';
+      f22Din <= f21Dout(1153 downto 73) & (W22_C-1081-1 downto 0 => '0');
+      f23WrEn <= '0'; f23RdEn <= '0';
+      f23Din <= f22Dout(1153 downto 73) & (W23_C-1081-1 downto 0 => '0');
+      f24WrEn <= '0'; f24RdEn <= '0';
+      f24Din <= f23Dout & (W24_C-W23_C-1 downto 0 => '0');
+      f25WrEn <= '0'; f25RdEn <= '0';
+      f25Din <= f24Dout(1155 downto 2) & (W25_C-1154-1 downto 0 => '0');
+      f26WrEn <= '0'; f26RdEn <= '0';
+      f26Din <= f25Dout(1203 downto 116) & (W26_C-1088-1 downto 0 => '0');
+      f27WrEn <= '0'; f27RdEn <= '0';
+      f27Din <= f26Dout & (W27_C-W26_C-1 downto 0 => '0');
+      f28WrEn <= '0'; f28RdEn <= '0';
+      f28Din <= f27Dout(1427 downto 346) & (W28_C-1082-1 downto 0 => '0');
+      f29WrEn <= '0'; f29RdEn <= '0';
+      f29Din <= f28Dout(1427 downto 341) & (W29_C-1087-1 downto 0 => '0');
+      f30WrEn <= '0'; f30RdEn <= '0';
+      f30Din <= f29Dout(1203 downto 555) & (W30_C-649-1 downto 0 => '0');
+      f31WrEn <= '0'; f31RdEn <= '0';
+      f31Din <= f30Dout(1203 downto 555) & (W31_C-649-1 downto 0 => '0');
+      f32WrEn <= '0'; f32RdEn <= '0';
+      f32Din <= f31Dout(1797 downto 594);
       wcOutWrEn  <= '0'; wcOutDin  <= (others => '0');
       rhOutWrEn  <= '0'; rhOutDin  <= (others => '0');
       psnOutWrEn <= '0'; psnOutDin <= (others => '0');
@@ -2279,7 +2319,6 @@ begin
                                & f10Dout(166 downto 143)    -- endPSN   = reqPktInfo[38:15]
                                & f10Dout(127 downto 0);     -- reth
          end if;
-         f11Din <= f10Dout;                                 -- tuple5 threaded unchanged
       end if;
       -- Stage 10 : queryPerm4DupReadReq (f11 -> f12) + dupReadAtomicCache.searchReadReq (BSV @1785)
       -- f12 tuple6: f11 payload + expectDupReadCheckResp[0].
@@ -2896,7 +2935,6 @@ begin
             rhOutWrEn  <= '1'; rhOutDin  <= f31Dout(592 downto 0);        -- HeaderRDMA
             psnOutWrEn <= '1'; psnOutDin <= f31Dout(643 downto 620);      -- respPSN
          end if;
-         f32Din <= f31Dout(1797 downto 594);   -- workCompReqQ tuple6 (drop maybeHeader)
       end if;
       -- Stage 31 : genWorkCompRQ (f32 -> workCompGenReqOutQ) + CountCF decrOne
       --            (BSV genWorkCompRQ @3385). Runs at normal, retry AND error state.

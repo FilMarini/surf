@@ -97,6 +97,7 @@ entity Qp is
       EN_TX_G        : boolean  := true;
       EN_RX_G        : boolean  := true;
       EN_READ_G      : boolean  := true;
+      WRITE_IMM_ONLY_G : boolean := false;
       -- Settings.bsv MAX_QP_WR (BSV default 32): max pending work requests per
       -- QP (effective in-flight window is MAX_QP_WR_G-1, one slot reserved).
       -- Must be a power of 2 (sizes SqQueuePair's ScanFifoF).
@@ -1342,6 +1343,7 @@ begin
          generic map (
             TPD_G       => TPD_G,
             EN_READ_G   => EN_READ_G,
+            WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G,
             MAX_QP_WR_G => MAX_QP_WR_G)
          port map (
             clk                            => clk,
@@ -1454,6 +1456,7 @@ begin
             RST_POLARITY_G => RST_POLARITY_G,
             RST_ASYNC_G    => RST_ASYNC_G,
             EN_READ_G      => EN_READ_G,
+            WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G,
             MAX_QP_WR_G    => MAX_QP_WR_G)
          port map (
             clk                    => clk,

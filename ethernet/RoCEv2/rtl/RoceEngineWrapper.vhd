@@ -84,7 +84,9 @@ entity RoceEngineWrapper is
       --   EN_TX_G=true, EN_RX_G=false, EN_READ_G=false.
       EN_TX_G        : boolean  := true;
       EN_RX_G        : boolean  := true;
-      EN_READ_G      : boolean  := true);
+      EN_READ_G      : boolean  := true;
+      WRITE_IMM_ONLY_G : boolean := false;
+      MAX_MR_PER_PD_G  : positive := 128);
    port (
       clk                 : in  sl;
       rst                 : in  sl := not RST_POLARITY_G;
@@ -256,7 +258,9 @@ begin
          MAX_QP_WR_G => MAX_QP_WR_G,
          EN_TX_G     => EN_TX_G,
          EN_RX_G     => EN_RX_G,
-         EN_READ_G   => EN_READ_G)
+         EN_READ_G   => EN_READ_G,
+         WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G,
+         MAX_MR_PER_PD_G  => MAX_MR_PER_PD_G)
       port map (
          clk                => clk,
          rst                => rst,

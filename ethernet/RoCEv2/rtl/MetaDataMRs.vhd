@@ -28,7 +28,8 @@
 --     ReqMR     = 252 b : allocOrNot[251] mr[250:65] lkeyOrNot[64]
 --                         lkey[63:32] rkey[31:0]
 --     RespMR    = 251 b : successOrNot[250] mr[249:64] lkey[63:32] rkey[31:0]
---     MR_INDEX_WIDTH = TLog#(MAX_MR_PER_PD=128) = 7  (KEY_WIDTH = 32)
+--     MR_INDEX_WIDTH = 7 for the fixed 32-bit key ABI; the physical table
+--     may contain fewer than 128 entries without changing key layout.
 --   Child TagVecSrv interface words (V_SZ_G=128 -> log2=7, T_SZ_G=186):
 --     reqData  = {allocOrNot[193], mr[192:7], mrIndex[6:0]}        (194 b)
 --     respData = {successOrNot[193], mrIndex[192:186], mr[185:0]}  (194 b)
@@ -98,7 +99,7 @@ architecture rtl of MetaDataMRs is
 
    -- Widths (traced; see header)
    constant MEM_REGION_WIDTH_C : integer := 186;
-   constant MR_INDEX_WIDTH_C   : integer := log2(MAX_MR_PER_PD_G);  -- 7 for 128
+   constant MR_INDEX_WIDTH_C   : integer := 7;  -- fixed key[31:25] ABI
    constant CHILD_WORD_WIDTH_C : integer := MEM_REGION_WIDTH_C + MR_INDEX_WIDTH_C;  -- 193 (=> slv 193:0, 194 b)
 
    -- MemRegion sub-field LSB positions within the 186-bit MemRegion word
@@ -130,6 +131,10 @@ architecture rtl of MetaDataMRs is
    signal lkupKey : slv(31 downto 0);
 
 begin
+
+   assert MAX_MR_PER_PD_G <= 128
+      report "MetaDataMRs: 32-bit keys support at most 128 entries per PD"
+      severity failure;
 
    ---------------------------------------------------------------------------
    -- Request path: key -> index, forward {allocOrNot, mr, mrIndex} to child
@@ -184,7 +189,8 @@ begin
          RST_POLARITY_G => '1',
          RST_ASYNC_G    => false,
          MEMORY_TYPE_G  => "distributed",
-         V_SZ_G         => MAX_MR_PER_PD_G,     -- 128 tag entries
+         V_SZ_G         => MAX_MR_PER_PD_G,
+         INDEX_WIDTH_G  => MR_INDEX_WIDTH_C,
          T_SZ_G         => MEM_REGION_WIDTH_C)  -- 186-bit MemRegion per entry
       port map (
          clk        => clk,

@@ -47,6 +47,7 @@ entity Rq is
       -- generated (its client faces are tied inert) and ReqHandleRq NAKs
       -- incoming READ/atomic requests as unsupported (INV_REQ).
       EN_READ_G : boolean := true;
+      WRITE_IMM_ONLY_G : boolean := false;
       -- Settings.bsv MAX_QP_WR (BSV default 32); pass-through to ReqHandleRq
       MAX_QP_WR_G : positive := 4);
    port (
@@ -320,6 +321,7 @@ begin
       generic map (
          TPD_G       => TPD_G,
          EN_READ_G   => EN_READ_G,
+         WRITE_IMM_ONLY_G => WRITE_IMM_ONLY_G,
          MAX_QP_WR_G => MAX_QP_WR_G)
       port map (
          clk                            => clk,
