@@ -8,6 +8,11 @@
 --   machines that thread registers across the pipeline (⚑S3 OQ-PART-01 RESOLVED:
 --   KEEP FUSED — the error/retry control plane defeats the FIFO-boundary cut).
 --
+--   EN_READ_G=false excludes the READ/atomic-only queues, server and pending
+--   counter. Shared metadata bypasses stages 9..11, 18..19 and 24..28 with
+--   downstream backpressure; permission, payload consume, ACK/NAK and completion
+--   handling remain active. Disabled queues advertise neither data nor storage.
+--
 --   The five control sub-FSMs (RegType blocks A–E):
 --     A  pre-stage FSM       : preStageState (build -> calc -> done) meters one
 --                              packet at a time into the pipeline.
@@ -97,8 +102,8 @@ entity ReqHandleRq is
       -- false = no RDMA READ/atomic serving: read/atomic-request classifiers
       -- are forced false, so incoming READ/CMP_SWP/FETCH_ADD requests take the
       -- existing unsupported-opcode NAK-INV_REQ path and the read/atomic
-      -- serving datapath (dup cache, payload gen, atomic srv) constant-folds.
-      EN_READ_G : boolean := true;
+      -- serving queues and control are explicitly excluded below.
+      EN_READ_G        : boolean := true;
       WRITE_IMM_ONLY_G : boolean := false;
       -- Settings.bsv MAX_QP_WR (BSV default 32); must match CntrlQp MAX_QP_WR_G
       MAX_QP_WR_G : positive := 4);
@@ -1178,7 +1183,7 @@ begin
    wcOutRdEn           <= workCompGenReqRdEn;
 
    ---------------------------------------------------------------------------
-   -- 35 SURF Fifo instances (all FWFT / sync / block; cleared by fifoClr).
+   -- Up to 35 SURF Fifo instances (FWFT / sync; cleared by fifoClr).
    -- Minimal port map (surf.Fifo unmapped ports carry their entity defaults —
    -- same instantiation style as the emitted CountCF/RespHandleSq children).
    ---------------------------------------------------------------------------
@@ -1317,51 +1322,75 @@ begin
          rd_en => f09RdEn,
          dout => f09Dout,
          valid => f09Valid);
-   U_ReadCacheInsertQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W10_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f10WrEn,
-         din => f10Din,
-         not_full => f10NotFull,
-         rd_clk => clk,
-         rd_en => f10RdEn,
-         dout => f10Dout,
-         valid => f10Valid);
-   U_DupReadReqPermQueryQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W11_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f11WrEn,
-         din => f11Din,
-         not_full => f11NotFull,
-         rd_clk => clk,
-         rd_en => f11RdEn,
-         dout => f11Dout,
-         valid => f11Valid);
-   U_DupReadReqPermCheckQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W12_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f12WrEn,
-         din => f12Din,
-         not_full => f12NotFull,
-         rd_clk => clk,
-         rd_en => f12RdEn,
-         dout => f12Dout,
-         valid => f12Valid);
+   GEN_READCACHEINSERT : if EN_READ_G generate
+      U_ReadCacheInsertQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W10_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f10WrEn,
+            din => f10Din,
+            not_full => f10NotFull,
+            rd_clk => clk,
+            rd_en => f10RdEn,
+            dout => f10Dout,
+            valid => f10Valid);
+   end generate;
+   GEN_NO_READCACHEINSERT : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f10NotFull <= '0';
+      f10Valid   <= '0';
+      f10Dout    <= (others => '0');
+   end generate;
+   GEN_DUPREADREQPERMQUERY : if EN_READ_G generate
+      U_DupReadReqPermQueryQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W11_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f11WrEn,
+            din => f11Din,
+            not_full => f11NotFull,
+            rd_clk => clk,
+            rd_en => f11RdEn,
+            dout => f11Dout,
+            valid => f11Valid);
+   end generate;
+   GEN_NO_DUPREADREQPERMQUERY : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f11NotFull <= '0';
+      f11Valid   <= '0';
+      f11Dout    <= (others => '0');
+   end generate;
+   GEN_DUPREADREQPERMCHECK : if EN_READ_G generate
+      U_DupReadReqPermCheckQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W12_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f12WrEn,
+            din => f12Din,
+            not_full => f12NotFull,
+            rd_clk => clk,
+            rd_en => f12RdEn,
+            dout => f12Dout,
+            valid => f12Valid);
+   end generate;
+   GEN_NO_DUPREADREQPERMCHECK : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f12NotFull <= '0';
+      f12Valid   <= '0';
+      f12Dout    <= (others => '0');
+   end generate;
    U_ReqAddrCalcQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
@@ -1452,36 +1481,52 @@ begin
          rd_en => f18RdEn,
          dout => f18Dout,
          valid => f18Valid);
-   U_IssuePayloadGenReqQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W19_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f19WrEn,
-         din => f19Din,
-         not_full => f19NotFull,
-         rd_clk => clk,
-         rd_en => f19RdEn,
-         dout => f19Dout,
-         valid => f19Valid);
-   U_IssueAtomicReqQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W20_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f20WrEn,
-         din => f20Din,
-         not_full => f20NotFull,
-         rd_clk => clk,
-         rd_en => f20RdEn,
-         dout => f20Dout,
-         valid => f20Valid);
+   GEN_ISSUEPAYLOADGENREQ : if EN_READ_G generate
+      U_IssuePayloadGenReqQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W19_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f19WrEn,
+            din => f19Din,
+            not_full => f19NotFull,
+            rd_clk => clk,
+            rd_en => f19RdEn,
+            dout => f19Dout,
+            valid => f19Valid);
+   end generate;
+   GEN_NO_ISSUEPAYLOADGENREQ : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f19NotFull <= '0';
+      f19Valid   <= '0';
+      f19Dout    <= (others => '0');
+   end generate;
+   GEN_ISSUEATOMICREQ : if EN_READ_G generate
+      U_IssueAtomicReqQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W20_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f20WrEn,
+            din => f20Din,
+            not_full => f20NotFull,
+            rd_clk => clk,
+            rd_en => f20RdEn,
+            dout => f20Dout,
+            valid => f20Valid);
+   end generate;
+   GEN_NO_ISSUEATOMICREQ : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f20NotFull <= '0';
+      f20Valid   <= '0';
+      f20Dout    <= (others => '0');
+   end generate;
    U_RespGenCheck4NormalCaseQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
@@ -1542,81 +1587,120 @@ begin
          rd_en => f24RdEn,
          dout => f24Dout,
          valid => f24Valid);
-   U_WaitAtomicRespQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W25_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f25WrEn,
-         din => f25Din,
-         not_full => f25NotFull,
-         rd_clk => clk,
-         rd_en => f25RdEn,
-         dout => f25Dout,
-         valid => f25Valid);
-   U_AtomicCacheInsertQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W26_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f26WrEn,
-         din => f26Din,
-         not_full => f26NotFull,
-         rd_clk => clk,
-         rd_en => f26RdEn,
-         dout => f26Dout,
-         valid => f26Valid);
-   U_RespCheckQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W27_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f27WrEn,
-         din => f27Din,
-         not_full => f27NotFull,
-         rd_clk => clk,
-         rd_en => f27RdEn,
-         dout => f27Dout,
-         valid => f27Valid);
-   U_DupAtomicReqPermQueryQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W28_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f28WrEn,
-         din => f28Din,
-         not_full => f28NotFull,
-         rd_clk => clk,
-         rd_en => f28RdEn,
-         dout => f28Dout,
-         valid => f28Valid);
-   U_DupAtomicReqPermCheckQ : entity surf.Fifo
-      generic map (
-         TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
-         GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W29_C, ADDR_WIDTH_G => 4)
-      port map (
-         rst => fifoClr,
-         wr_clk => clk,
-         wr_en => f29WrEn,
-         din => f29Din,
-         not_full => f29NotFull,
-         rd_clk => clk,
-         rd_en => f29RdEn,
-         dout => f29Dout,
-         valid => f29Valid);
+   GEN_WAITATOMICRESP : if EN_READ_G generate
+      U_WaitAtomicRespQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W25_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f25WrEn,
+            din => f25Din,
+            not_full => f25NotFull,
+            rd_clk => clk,
+            rd_en => f25RdEn,
+            dout => f25Dout,
+            valid => f25Valid);
+   end generate;
+   GEN_NO_WAITATOMICRESP : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f25NotFull <= '0';
+      f25Valid   <= '0';
+      f25Dout    <= (others => '0');
+   end generate;
+   GEN_ATOMICCACHEINSERT : if EN_READ_G generate
+      U_AtomicCacheInsertQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W26_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f26WrEn,
+            din => f26Din,
+            not_full => f26NotFull,
+            rd_clk => clk,
+            rd_en => f26RdEn,
+            dout => f26Dout,
+            valid => f26Valid);
+   end generate;
+   GEN_NO_ATOMICCACHEINSERT : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f26NotFull <= '0';
+      f26Valid   <= '0';
+      f26Dout    <= (others => '0');
+   end generate;
+   GEN_READ_RESP_CHECK : if EN_READ_G generate
+      U_RespCheckQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W27_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f27WrEn,
+            din => f27Din,
+            not_full => f27NotFull,
+            rd_clk => clk,
+            rd_en => f27RdEn,
+            dout => f27Dout,
+            valid => f27Valid);
+   end generate;
+   GEN_NO_READ_RESP_CHECK : if not EN_READ_G generate
+      f27NotFull <= '0';
+      f27Valid   <= '0';
+      f27Dout    <= (others => '0');
+   end generate;
+   GEN_DUPATOMICREQPERMQUERY : if EN_READ_G generate
+      U_DupAtomicReqPermQueryQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W28_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f28WrEn,
+            din => f28Din,
+            not_full => f28NotFull,
+            rd_clk => clk,
+            rd_en => f28RdEn,
+            dout => f28Dout,
+            valid => f28Valid);
+   end generate;
+   GEN_NO_DUPATOMICREQPERMQUERY : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f28NotFull <= '0';
+      f28Valid   <= '0';
+      f28Dout    <= (others => '0');
+   end generate;
+   GEN_DUPATOMICREQPERMCHECK : if EN_READ_G generate
+      U_DupAtomicReqPermCheckQ : entity surf.Fifo
+         generic map (
+            TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
+            GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
+            DATA_WIDTH_G => W29_C, ADDR_WIDTH_G => 4)
+         port map (
+            rst => fifoClr,
+            wr_clk => clk,
+            wr_en => f29WrEn,
+            din => f29Din,
+            not_full => f29NotFull,
+            rd_clk => clk,
+            rd_en => f29RdEn,
+            dout => f29Dout,
+            valid => f29Valid);
+   end generate;
+   GEN_NO_DUPATOMICREQPERMCHECK : if not EN_READ_G generate
+      -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
+      f29NotFull <= '0';
+      f29Valid   <= '0';
+      f29Dout    <= (others => '0');
+   end generate;
    U_RespHeaderGenQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
@@ -1712,41 +1796,52 @@ begin
    ---------------------------------------------------------------------------
    -- Child entity instances
    ---------------------------------------------------------------------------
-   -- CountCF child (RQ-02): pendingDestReadAtomicReqCnt <- mkCountCF(0)
-   U_PendingDestReadAtomicReqCnt : entity surf.CountCF
-      generic map (
-         TPD_G             => TPD_G,
-         RST_POLARITY_G    => '1',
-         RST_ASYNC_G       => false,
-         WIDTH_G           => 8,               -- PendingReqCnt
-         RESET_VAL_G       => "00000000",      -- mkCountCF(0)
-         FIFO_ADDR_WIDTH_G => 4)
-      port map (
-         clk        => clk,
-         rst        => fifoClr,                -- rst OR isReset (write/clear path handled inside)
-         incrOneEn  => ccIncrEn,
-         incrOneRdy => ccIncrRdy,
-         decrOneEn  => ccDecrEn,
-         decrOneRdy => ccDecrRdy,
-         writeEn    => ccWriteEn,
-         writeVal   => ccWriteVal,
-         cntOut     => ccCnt);
+   GEN_READ_ATOMIC_SERVERS : if EN_READ_G generate
+      -- CountCF child (RQ-02): pendingDestReadAtomicReqCnt <- mkCountCF(0)
+      U_PendingDestReadAtomicReqCnt : entity surf.CountCF
+         generic map (
+            TPD_G             => TPD_G,
+            RST_POLARITY_G    => '1',
+            RST_ASYNC_G       => false,
+            WIDTH_G           => 8,               -- PendingReqCnt
+            RESET_VAL_G       => "00000000",      -- mkCountCF(0)
+            FIFO_ADDR_WIDTH_G => 4)
+         port map (
+            clk        => clk,
+            rst        => fifoClr,                -- rst OR isReset (write/clear path handled inside)
+            incrOneEn  => ccIncrEn,
+            incrOneRdy => ccIncrRdy,
+            decrOneEn  => ccDecrEn,
+            decrOneRdy => ccDecrRdy,
+            writeEn    => ccWriteEn,
+            writeVal   => ccWriteVal,
+            cntOut     => ccCnt);
 
-   -- AtomicSrv child (RQ-06 STUB): mkAtomicSrv(cntrlStatus) — CAS/FetchAdd NOT implemented
-   U_AtomicSrv : entity surf.AtomicSrvConAndGen
-      generic map (
-         TPD_G        => TPD_G,
-         REQ_WIDTH_G  => 245,                  -- AtomicOpReq
-         RESP_WIDTH_G => 116)                  -- AtomicOpResp
-      port map (
-         clk       => clk,
-         rst       => fifoClr,
-         reqValid  => atomicReqValid,
-         reqData   => atomicReqData,
-         reqRdy    => atomicReqRdy,
-         respValid => atomicRespValid,
-         respData  => atomicRespData,
-         respRdy   => atomicRespRdEn);
+      -- AtomicSrv child (RQ-06 STUB): mkAtomicSrv(cntrlStatus) — CAS/FetchAdd NOT implemented
+      U_AtomicSrv : entity surf.AtomicSrvConAndGen
+         generic map (
+            TPD_G        => TPD_G,
+            REQ_WIDTH_G  => 245,                  -- AtomicOpReq
+            RESP_WIDTH_G => 116)                  -- AtomicOpResp
+         port map (
+            clk       => clk,
+            rst       => fifoClr,
+            reqValid  => atomicReqValid,
+            reqData   => atomicReqData,
+            reqRdy    => atomicReqRdy,
+            respValid => atomicRespValid,
+            respData  => atomicRespData,
+            respRdy   => atomicRespRdEn);
+
+   end generate;
+   GEN_NO_READ_ATOMIC_SERVERS : if not EN_READ_G generate
+      ccCnt           <= (others => '0');
+      ccIncrRdy       <= '0';
+      ccDecrRdy       <= '0';
+      atomicReqRdy    <= '0';
+      atomicRespValid <= '0';
+      atomicRespData  <= (others => '0');
+   end generate;
 
    -- CombineHeaderAndPayload child: drives rdmaRespDataStreamPipeOut.
    -- header  <- respHeaderOutQ read side; psn <- psnRespOutQ read side;
@@ -2130,7 +2225,7 @@ begin
          reqStatusV  := f05Dout(381 downto 378);
          transV      := reqPktInfoV(160 downto 158);
          if (reqStatusV = ST_NORMAL_C and hasErrHappened = '0') then
-            if (reqPktInfoV(11) = '1' or reqPktInfoV(10) = '1') then   -- isReadReq or isAtomicReq
+            if (EN_READ_G and (reqPktInfoV(11) = '1' or reqPktInfoV(10) = '1')) then   -- isReadReq or isAtomicReq
                ccIncrEn <= '1';                                        -- pendingDestReadAtomicReqCnt.incrOne
                if (unsigned(ccCnt) >= unsigned(getPendingDestReadAtomicReqNum)) then
                   reqStatusV := invReqStatus(transV);                  -- getInvReqStatusByTransType
@@ -2217,7 +2312,7 @@ begin
          recvReqV      := f07Dout(215 downto 0);
          pdHandlerV    := f07Dout(810 downto 779);           -- pmd.pdHandler
          atomicVaV     := f07Dout(1307 downto 1244);         -- AtomicEth.va = pmd[530:467]
-         if (hasErrHappened = '0') then
+         if (EN_READ_G and hasErrHappened = '0') then
             if (reqPktInfoV(11) = '1' and (reqStatusV = ST_NORMAL_C or reqStatusV = ST_DUP_C)) then  -- read
                permCheckReqV(266)          := '0';                              -- wrID Invalid
                permCheckReqV(169 downto 138) := rethV(63 downto 32);            -- rkey = reth.rkey
@@ -2277,9 +2372,9 @@ begin
       --   permCheckReq[555:289] reqPktInfo[288:128] reth[127:0]
       -- response.get is conditional on expectPermCheckResp; gate on permRespValid only then.
       expectPermV := f09Dout(0);
-      if (workerEnable and f09Valid = '1' and f10NotFull = '1'
+      if (workerEnable and f09Valid = '1' and ite(EN_READ_G, f10NotFull, f13NotFull) = '1'
           and (expectPermV = '0' or permRespValid = '1')) then
-         f09RdEn <= '1'; f10WrEn <= '1';
+         f09RdEn <= '1';
          reqPktInfoV   := f09Dout(289 downto 129);
          permCheckReqV := f09Dout(556 downto 290);
          reqStatusV    := f09Dout(560 downto 557);
@@ -2288,7 +2383,7 @@ begin
          if (expectPermV = '1') then
             permRespGetEn <= '1';
             if (permRespData = '1') then                     -- mrCheckResult granted
-               if (reqPktInfoV(10) = '1') then               -- isAtomicReq
+               if (EN_READ_G and reqPktInfoV(10) = '1') then -- isAtomicReq
                   if (atomicVaV(2 downto 0) /= "000") then    -- !isAlignedAtomicAddr
                      reqStatusV := invReqStatus(transV);
                   end if;
@@ -2297,76 +2392,85 @@ begin
                reqStatusV := ST_RMT_ACC_C;                   -- RDMA_REQ_ST_RMT_ACC
             end if;
          end if;
-         f10Din <= f09Dout(1209 downto 561) & reqStatusV & permCheckReqV
-                   & reqPktInfoV & f09Dout(128 downto 1);
-      end if;
-      -- Stage 9 : insertIntoReadCache (f10 -> f11) + dupReadAtomicCache.insertRead (BSV @1751)
-      -- f10/f11 tuple5: pmd[1208:560] reqStatus[559:556] permCheckReq[555:289]
-      --   reqPktInfo[288:128] reth[127:0]. ReadCacheItem(176): startPSN=bth.psn[175:152]
-      --   endPSN=reqPktInfo.endPSN[151:128] reth[127:0].
-      -- insertRead is CONDITIONAL (NORMAL first/only read, no error): fire deq/enq
-      -- unconditionally, gate on insertReadReady only when inserting; payload is unchanged.
-      reqStatusV  := f10Dout(559 downto 556);
-      reqPktInfoV := f10Dout(288 downto 128);
-      doDupCacheV := (reqStatusV = ST_NORMAL_C) and (reqPktInfoV(11) = '1')       -- isReadReq
-                     and (reqPktInfoV(5) = '1') and (hasErrHappened = '0');       -- isFirstOrOnlyPkt
-      if (workerEnable and f10Valid = '1' and f11NotFull = '1'
-          and (not doDupCacheV or insertReadReady = '1')) then
-         f10RdEn <= '1'; f11WrEn <= '1';
-         if (doDupCacheV) then
-            insertReadValid <= '1';
-            insertReadData  <= f10Dout(216 downto 193)      -- startPSN = bth.psn = reqPktInfo[88:65]
-                               & f10Dout(166 downto 143)    -- endPSN   = reqPktInfo[38:15]
-                               & f10Dout(127 downto 0);     -- reth
+         if EN_READ_G then
+            f10WrEn <= '1';
+            f10Din <= f09Dout(1209 downto 561) & reqStatusV & permCheckReqV
+                      & reqPktInfoV & f09Dout(128 downto 1);
+         else
+            f13WrEn <= '1';
+            f13Din <= f09Dout(1209 downto 561) & reqStatusV & permCheckReqV
+                      & reqPktInfoV & '0';  -- no duplicate-read start state
          end if;
       end if;
-      -- Stage 10 : queryPerm4DupReadReq (f11 -> f12) + dupReadAtomicCache.searchReadReq (BSV @1785)
-      -- f12 tuple6: f11 payload + expectDupReadCheckResp[0].
-      -- searchReadReq is CONDITIONAL (DUP first/only read, no error); expectDup mirrors it.
-      reqStatusV  := f11Dout(559 downto 556);
-      reqPktInfoV := f11Dout(288 downto 128);
-      doDupCacheV := (reqStatusV = ST_DUP_C) and (reqPktInfoV(11) = '1')          -- isReadReq
-                     and (reqPktInfoV(5) = '1') and (hasErrHappened = '0');       -- isFirstOrOnlyPkt
-      if (workerEnable and f11Valid = '1' and f12NotFull = '1'
-          and (not doDupCacheV or searchReadReqReady = '1')) then
-         f11RdEn <= '1'; f12WrEn <= '1';
-         expectDupV := '0';
-         if (doDupCacheV) then
-            searchReadReqValid <= '1';
-            searchReadReqData  <= f11Dout(216 downto 193)   -- startPSN = bth.psn
-                                  & f11Dout(166 downto 143) -- endPSN
-                                  & f11Dout(127 downto 0);  -- reth
-            expectDupV := '1';
-         end if;
-         f12Din <= f11Dout & expectDupV;
-      end if;
-      -- Stage 11 : checkPerm4DupReadReq (f12 -> f13) + dupReadAtomicCache.searchReadResp (BSV @1821)
-      -- f12 tuple6: pmd[1209:561] reqStatus[560:557] permCheckReq[556:290]
-      --   reqPktInfo[289:129] reth[128:1] expectDup[0].
-      -- f13 tuple5: pmd[1081:433] reqStatus[432:429] permCheckReq[428:162]
-      --   reqPktInfo[161:1] dupReadReqStartState[0].
-      -- searchReadResp Maybe#Tuple3 (242b): valid[241] origReadCacheItem[240:65]
-      --   verifiedDupReadAddr(ADDR)[64:1] dupReadReqStart(DupReadReqStartState)[0].
-      -- response.get is CONDITIONAL on expectDup; on Valid patch permCheckReq.reqAddr and
-      -- carry dupReadReqStart; on Invalid mark DISCARD (drop erroneous duplicate).
-      expectDupV := f12Dout(0);
-      if (workerEnable and f12Valid = '1' and f13NotFull = '1'
-          and (expectDupV = '0' or searchReadRespValid = '1')) then
-         f12RdEn <= '1'; f13WrEn <= '1';
-         reqStatusV    := f12Dout(560 downto 557);
-         permCheckReqV := f12Dout(556 downto 290);
-         dupStartV     := '0';                              -- DUP_READ_REQ_START_FROM_FIRST
-         if (expectDupV = '1') then
-            searchReadRespGetEn <= '1';
-            if (searchReadRespData(241) = '1') then          -- tagged Valid
-               permCheckReqV(136 downto 73) := searchReadRespData(64 downto 1);  -- reqAddr = verifiedDupReadAddr
-               dupStartV                    := searchReadRespData(0);            -- dupReadReqStart
-            else
-               reqStatusV := ST_DISCARD_C;                   -- discard duplicate w/ error
+      if EN_READ_G then
+         -- Stage 9 : insertIntoReadCache (f10 -> f11) + dupReadAtomicCache.insertRead (BSV @1751)
+         -- f10/f11 tuple5: pmd[1208:560] reqStatus[559:556] permCheckReq[555:289]
+         --   reqPktInfo[288:128] reth[127:0]. ReadCacheItem(176): startPSN=bth.psn[175:152]
+         --   endPSN=reqPktInfo.endPSN[151:128] reth[127:0].
+         -- insertRead is CONDITIONAL (NORMAL first/only read, no error): fire deq/enq
+         -- unconditionally, gate on insertReadReady only when inserting; payload is unchanged.
+         reqStatusV  := f10Dout(559 downto 556);
+         reqPktInfoV := f10Dout(288 downto 128);
+         doDupCacheV := (reqStatusV = ST_NORMAL_C) and (reqPktInfoV(11) = '1')       -- isReadReq
+                        and (reqPktInfoV(5) = '1') and (hasErrHappened = '0');       -- isFirstOrOnlyPkt
+         if (workerEnable and f10Valid = '1' and f11NotFull = '1'
+             and (not doDupCacheV or insertReadReady = '1')) then
+            f10RdEn <= '1'; f11WrEn <= '1';
+            if (doDupCacheV) then
+               insertReadValid <= '1';
+               insertReadData  <= f10Dout(216 downto 193)      -- startPSN = bth.psn = reqPktInfo[88:65]
+                                  & f10Dout(166 downto 143)    -- endPSN   = reqPktInfo[38:15]
+                                  & f10Dout(127 downto 0);     -- reth
             end if;
          end if;
-         f13Din <= f12Dout(1209 downto 561) & reqStatusV & permCheckReqV
-                   & f12Dout(289 downto 129) & dupStartV;
+         -- Stage 10 : queryPerm4DupReadReq (f11 -> f12) + dupReadAtomicCache.searchReadReq (BSV @1785)
+         -- f12 tuple6: f11 payload + expectDupReadCheckResp[0].
+         -- searchReadReq is CONDITIONAL (DUP first/only read, no error); expectDup mirrors it.
+         reqStatusV  := f11Dout(559 downto 556);
+         reqPktInfoV := f11Dout(288 downto 128);
+         doDupCacheV := (reqStatusV = ST_DUP_C) and (reqPktInfoV(11) = '1')          -- isReadReq
+                        and (reqPktInfoV(5) = '1') and (hasErrHappened = '0');       -- isFirstOrOnlyPkt
+         if (workerEnable and f11Valid = '1' and f12NotFull = '1'
+             and (not doDupCacheV or searchReadReqReady = '1')) then
+            f11RdEn <= '1'; f12WrEn <= '1';
+            expectDupV := '0';
+            if (doDupCacheV) then
+               searchReadReqValid <= '1';
+               searchReadReqData  <= f11Dout(216 downto 193)   -- startPSN = bth.psn
+                                     & f11Dout(166 downto 143) -- endPSN
+                                     & f11Dout(127 downto 0);  -- reth
+               expectDupV := '1';
+            end if;
+            f12Din <= f11Dout & expectDupV;
+         end if;
+         -- Stage 11 : checkPerm4DupReadReq (f12 -> f13) + dupReadAtomicCache.searchReadResp (BSV @1821)
+         -- f12 tuple6: pmd[1209:561] reqStatus[560:557] permCheckReq[556:290]
+         --   reqPktInfo[289:129] reth[128:1] expectDup[0].
+         -- f13 tuple5: pmd[1081:433] reqStatus[432:429] permCheckReq[428:162]
+         --   reqPktInfo[161:1] dupReadReqStartState[0].
+         -- searchReadResp Maybe#Tuple3 (242b): valid[241] origReadCacheItem[240:65]
+         --   verifiedDupReadAddr(ADDR)[64:1] dupReadReqStart(DupReadReqStartState)[0].
+         -- response.get is CONDITIONAL on expectDup; on Valid patch permCheckReq.reqAddr and
+         -- carry dupReadReqStart; on Invalid mark DISCARD (drop erroneous duplicate).
+         expectDupV := f12Dout(0);
+         if (workerEnable and f12Valid = '1' and f13NotFull = '1'
+             and (expectDupV = '0' or searchReadRespValid = '1')) then
+            f12RdEn <= '1'; f13WrEn <= '1';
+            reqStatusV    := f12Dout(560 downto 557);
+            permCheckReqV := f12Dout(556 downto 290);
+            dupStartV     := '0';                              -- DUP_READ_REQ_START_FROM_FIRST
+            if (expectDupV = '1') then
+               searchReadRespGetEn <= '1';
+               if (searchReadRespData(241) = '1') then          -- tagged Valid
+                  permCheckReqV(136 downto 73) := searchReadRespData(64 downto 1);  -- reqAddr = verifiedDupReadAddr
+                  dupStartV                    := searchReadRespData(0);            -- dupReadReqStart
+               else
+                  reqStatusV := ST_DISCARD_C;                   -- discard duplicate w/ error
+               end if;
+            end if;
+            f13Din <= f12Dout(1209 downto 561) & reqStatusV & permCheckReqV
+                      & f12Dout(289 downto 129) & dupStartV;
+         end if;
       end if;
       -- Stage 12 : calcNormalSendWriteReqDmaAddr (f13 -> f14 = f13 & curDmaWriteAddr[63:0]) (BSV @1888)
       -- f13 tuple5: pmd[1081:433] reqStatus[432:429] permCheckReq[428:162] reqPktInfo[161:1]
@@ -2543,9 +2647,9 @@ begin
       doConPutV := ((reqStatusV = ST_NORMAL_C) and (hasErrHappened = '0')
                     and ((f18Dout(79) = '1') or (f18Dout(78) = '1')) and (f18Dout(234) = '0'))
                    or ((not ((reqStatusV = ST_NORMAL_C) and (hasErrHappened = '0'))) and (f18Dout(1124) = '0'));
-      if (workerEnable and f18Valid = '1' and f19NotFull = '1'
+      if (workerEnable and f18Valid = '1' and ite(EN_READ_G, f19NotFull, f21NotFull) = '1'
           and (not doConPutV or payloadConReqReady = '1')) then
-         f18RdEn <= '1'; f19WrEn <= '1';
+         f18RdEn <= '1';
          if (doConPutV) then
             payloadConReqValid <= '1';
             -- DmaWriteMetaData: initiator (WR normal / DISCARD else), sqpn, startAddr=curDmaWriteAddr,
@@ -2568,73 +2672,84 @@ begin
             hasReqStErrV := '1';
          end if;
          v.hasReqStatusErr := hasReqStErrV;
-         f19Din <= f18Dout(1145 downto 65) & hasReqStErrV & f18Dout(0);
-      end if;
-      -- Stage 18 : issuePayloadGenReq (f19 -> f20) + payloadGenerator.request.put (BSV @2331)
-      -- f19 tuple6: pmd[1082:434] reqStatus[433:430] permCheckReq[429:163] reqPktInfo[162:2]
-      --   hasReqStatusErr[1] dupReadReqStartState[0].  isReadReq=f19[13];
-      --   permCheckReq.isZeroDmaLen=f19[171] reqAddr=f19[299:236] totalLen=f19[235:204] rkey=f19[332:301].
-      -- PayloadGenReq(199): dmaReadMetaData[198:4] addPadding[3] pmtu[2:0].  DmaReadMetaData(195):
-      --   initiator[194:191] sqpn[190:167] wrID[166:103] startAddr[102:39] len[38:7] mrIdx[6:0].
-      --   mrIdx=key2IndexMR(rkey)=rkey[31:25].  request.put is CONDITIONAL.
-      -- f20 tuple5: pmd reqStatus permCheckReq reqPktInfo respPktGenInfo[72:0].
-      -- RespPktGenInfo(73): hasReqStatusErr[72] hasDmaReadRespErr[71] hasErrRespGen[70] shouldGenResp[69]
-      --   expectReadRespPayload[68] expectAtomicRespOrig[67] expectDupAtomicCheckResp[66]
-      --   atomicAckOrig(Maybe#Long)[65:1] dupReadReqStartState[0].
-      reqStatusV   := f19Dout(433 downto 430);
-      doGenReqV := (f19Dout(1) = '0') and (r.hasDmaReadRespErr = '0')     -- !hasReqStatusErr & !hasDmaReadRespErr
-                   and (f19Dout(171) = '0') and (f19Dout(13) = '1')       -- !isZeroDmaLen & isReadReq
-                   and ((reqStatusV = ST_NORMAL_C) or (reqStatusV = ST_DUP_C));
-      if (workerEnable and f19Valid = '1' and f20NotFull = '1'
-          and (not doGenReqV or payloadGenReqReady = '1')) then
-         f19RdEn <= '1'; f20WrEn <= '1';
-         expRdPayV := '0';
-         if (doGenReqV) then
-            payloadGenReqValid <= '1';
-            -- DmaReadMetaData: initiator=RD, sqpn, wrID=dontCare(0), startAddr=reqAddr, len=totalLen,
-            --   mrIdx=key2IndexMR(rkey)=rkey[31:25]
-            dmaRdMetaV := DMA_SRC_RQ_RD_C & getSQPN & slv(to_unsigned(0, 64))
-                          & f19Dout(299 downto 236) & f19Dout(235 downto 204) & f19Dout(332 downto 326);
-            payloadGenReqData <= dmaRdMetaV & '1' & getPMTU;   -- addPadding=True
-            expRdPayV := '1';
+         if EN_READ_G then
+            f19WrEn <= '1';
+            f19Din <= f18Dout(1145 downto 65) & hasReqStErrV & f18Dout(0);
+         else
+            -- Keep the shared sticky request-error bit; no read/atomic expectations.
+            respGenV := (others => '0');
+            respGenV(72) := hasReqStErrV;
+            f21WrEn <= '1';
+            f21Din <= f18Dout(1145 downto 65) & respGenV;
          end if;
-         -- RespPktGenInfo: only hasReqStatusErr / hasDmaReadRespErr / expectReadRespPayload /
-         --   dupReadReqStartState set here; the rest False / Invalid.
-         respGenV := (others => '0');
-         respGenV(72) := f19Dout(1);            -- hasReqStatusErr
-         respGenV(71) := r.hasDmaReadRespErr;   -- hasDmaReadRespErr
-         respGenV(68) := expRdPayV;             -- expectReadRespPayload
-         respGenV(0)  := f19Dout(0);            -- dupReadReqStartState
-         f20Din <= f19Dout(1082 downto 2) & respGenV;
       end if;
-      -- Stage 19 : issueAtomicReq (f20 -> f21) + U_AtomicSrv request (RQ-06 STUB) (BSV @2399)
-      -- f20 tuple5: pmd[1153:505] reqStatus[504:501] permCheckReq[500:234] reqPktInfo[233:73]
-      --   respPktGenInfo[72:0].  isAtomicReq=f20[83]; bth.opcode=f20[230:226]; bth.psn=f20[161:138];
-      --   respPktGenInfo.hasReqStatusErr=f20[72].  AtomicEth from pmd: va=f20[1035:972]
-      --   swap=f20[939:876] comp=f20[875:812].
-      -- AtomicOpReq(245): initiator[244:241] casOrFetchAdd[240] startAddr[239:176] compData[175:112]
-      --   swapData[111:48] sqpn[47:24] psn[23:0].  casOrFetchAdd = (opcode==COMPARE_SWAP=5'h13).
-      --   request.put is CONDITIONAL.  f21 = f20 with respPktGenInfo.{hasDmaReadRespErr,expectAtomicRespOrig}.
-      reqStatusV := f20Dout(504 downto 501);
-      doAtomicReqV := (f20Dout(72) = '0') and (r.hasDmaReadRespErr = '0')    -- !hasReqStatusErr & !hasDmaReadRespErr
-                      and (reqStatusV = ST_NORMAL_C) and (f20Dout(83) = '1'); -- NORMAL & isAtomicReq
-      if (workerEnable and f20Valid = '1' and f21NotFull = '1'
-          and (not doAtomicReqV or atomicReqRdy = '1')) then
-         f20RdEn <= '1'; f21WrEn <= '1';
-         expAtomicV := '0';
-         if (doAtomicReqV) then
-            atomicReqValid <= '1';
-            atomicReqData  <= DMA_SRC_RQ_ATOMIC_C & toSl(f20Dout(230 downto 226) = "10011")  -- casOrFetchAdd
-                              & f20Dout(1035 downto 972)     -- startAddr = atomicEth.va
-                              & f20Dout(875 downto 812)      -- compData  = atomicEth.comp
-                              & f20Dout(939 downto 876)      -- swapData  = atomicEth.swap
-                              & getSQPN & f20Dout(161 downto 138);  -- sqpn, psn
-            expAtomicV := '1';
+      if EN_READ_G then
+         -- Stage 18 : issuePayloadGenReq (f19 -> f20) + payloadGenerator.request.put (BSV @2331)
+         -- f19 tuple6: pmd[1082:434] reqStatus[433:430] permCheckReq[429:163] reqPktInfo[162:2]
+         --   hasReqStatusErr[1] dupReadReqStartState[0].  isReadReq=f19[13];
+         --   permCheckReq.isZeroDmaLen=f19[171] reqAddr=f19[299:236] totalLen=f19[235:204] rkey=f19[332:301].
+         -- PayloadGenReq(199): dmaReadMetaData[198:4] addPadding[3] pmtu[2:0].  DmaReadMetaData(195):
+         --   initiator[194:191] sqpn[190:167] wrID[166:103] startAddr[102:39] len[38:7] mrIdx[6:0].
+         --   mrIdx=key2IndexMR(rkey)=rkey[31:25].  request.put is CONDITIONAL.
+         -- f20 tuple5: pmd reqStatus permCheckReq reqPktInfo respPktGenInfo[72:0].
+         -- RespPktGenInfo(73): hasReqStatusErr[72] hasDmaReadRespErr[71] hasErrRespGen[70] shouldGenResp[69]
+         --   expectReadRespPayload[68] expectAtomicRespOrig[67] expectDupAtomicCheckResp[66]
+         --   atomicAckOrig(Maybe#Long)[65:1] dupReadReqStartState[0].
+         reqStatusV   := f19Dout(433 downto 430);
+         doGenReqV := (f19Dout(1) = '0') and (r.hasDmaReadRespErr = '0')     -- !hasReqStatusErr & !hasDmaReadRespErr
+                      and (f19Dout(171) = '0') and (f19Dout(13) = '1')       -- !isZeroDmaLen & isReadReq
+                      and ((reqStatusV = ST_NORMAL_C) or (reqStatusV = ST_DUP_C));
+         if (workerEnable and f19Valid = '1' and f20NotFull = '1'
+             and (not doGenReqV or payloadGenReqReady = '1')) then
+            f19RdEn <= '1'; f20WrEn <= '1';
+            expRdPayV := '0';
+            if (doGenReqV) then
+               payloadGenReqValid <= '1';
+               -- DmaReadMetaData: initiator=RD, sqpn, wrID=dontCare(0), startAddr=reqAddr, len=totalLen,
+               --   mrIdx=key2IndexMR(rkey)=rkey[31:25]
+               dmaRdMetaV := DMA_SRC_RQ_RD_C & getSQPN & slv(to_unsigned(0, 64))
+                             & f19Dout(299 downto 236) & f19Dout(235 downto 204) & f19Dout(332 downto 326);
+               payloadGenReqData <= dmaRdMetaV & '1' & getPMTU;   -- addPadding=True
+               expRdPayV := '1';
+            end if;
+            -- RespPktGenInfo: only hasReqStatusErr / hasDmaReadRespErr / expectReadRespPayload /
+            --   dupReadReqStartState set here; the rest False / Invalid.
+            respGenV := (others => '0');
+            respGenV(72) := f19Dout(1);            -- hasReqStatusErr
+            respGenV(71) := r.hasDmaReadRespErr;   -- hasDmaReadRespErr
+            respGenV(68) := expRdPayV;             -- expectReadRespPayload
+            respGenV(0)  := f19Dout(0);            -- dupReadReqStartState
+            f20Din <= f19Dout(1082 downto 2) & respGenV;
          end if;
-         respGenV      := f20Dout(72 downto 0);
-         respGenV(71)  := r.hasDmaReadRespErr;   -- hasDmaReadRespErr
-         respGenV(67)  := expAtomicV;            -- expectAtomicRespOrig
-         f21Din <= f20Dout(1153 downto 73) & respGenV;
+         -- Stage 19 : issueAtomicReq (f20 -> f21) + U_AtomicSrv request (RQ-06 STUB) (BSV @2399)
+         -- f20 tuple5: pmd[1153:505] reqStatus[504:501] permCheckReq[500:234] reqPktInfo[233:73]
+         --   respPktGenInfo[72:0].  isAtomicReq=f20[83]; bth.opcode=f20[230:226]; bth.psn=f20[161:138];
+         --   respPktGenInfo.hasReqStatusErr=f20[72].  AtomicEth from pmd: va=f20[1035:972]
+         --   swap=f20[939:876] comp=f20[875:812].
+         -- AtomicOpReq(245): initiator[244:241] casOrFetchAdd[240] startAddr[239:176] compData[175:112]
+         --   swapData[111:48] sqpn[47:24] psn[23:0].  casOrFetchAdd = (opcode==COMPARE_SWAP=5'h13).
+         --   request.put is CONDITIONAL.  f21 = f20 with respPktGenInfo.{hasDmaReadRespErr,expectAtomicRespOrig}.
+         reqStatusV := f20Dout(504 downto 501);
+         doAtomicReqV := (f20Dout(72) = '0') and (r.hasDmaReadRespErr = '0')    -- !hasReqStatusErr & !hasDmaReadRespErr
+                         and (reqStatusV = ST_NORMAL_C) and (f20Dout(83) = '1'); -- NORMAL & isAtomicReq
+         if (workerEnable and f20Valid = '1' and f21NotFull = '1'
+             and (not doAtomicReqV or atomicReqRdy = '1')) then
+            f20RdEn <= '1'; f21WrEn <= '1';
+            expAtomicV := '0';
+            if (doAtomicReqV) then
+               atomicReqValid <= '1';
+               atomicReqData  <= DMA_SRC_RQ_ATOMIC_C & toSl(f20Dout(230 downto 226) = "10011")  -- casOrFetchAdd
+                                 & f20Dout(1035 downto 972)     -- startAddr = atomicEth.va
+                                 & f20Dout(875 downto 812)      -- compData  = atomicEth.comp
+                                 & f20Dout(939 downto 876)      -- swapData  = atomicEth.swap
+                                 & getSQPN & f20Dout(161 downto 138);  -- sqpn, psn
+               expAtomicV := '1';
+            end if;
+            respGenV      := f20Dout(72 downto 0);
+            respGenV(71)  := r.hasDmaReadRespErr;   -- hasDmaReadRespErr
+            respGenV(67)  := expAtomicV;            -- expectAtomicRespOrig
+            f21Din <= f20Dout(1153 downto 73) & respGenV;
+         end if;
       end if;
       -- Stage 20 : shouldGenResp4NormalCase (f21 -> f22) + coalesce counter (Block E) (BSV @2447)
       -- f21 tuple5: pmd[1153:505] reqStatus[504:501] permCheckReq[500:234] reqPktInfo[233:73]
@@ -2756,8 +2871,8 @@ begin
       --   respPSN = isFirstOrOnlyRespPkt ? bth.psn : getCurRespPSN; msn = getMSN.
       --   f25 (1204, tuple6) = f24[1155:2] (tuple5) & respPktHeaderInfo[49:0]
       --     (psn[49:26] msn[25:2] isFirstOrOnlyRespPkt[1] isLastOrOnlyRespPkt[0]).
-      if (workerEnable and f24Valid = '1' and f25NotFull = '1') then
-         f24RdEn <= '1'; f25WrEn <= '1';
+      if (workerEnable and f24Valid = '1' and ite(EN_READ_G, f25NotFull, f30NotFull) = '1') then
+         f24RdEn <= '1';
          isFirstOrOnlyRespV := f24Dout(1);
          if (isFirstOrOnlyRespV = '1') then
             respPsnV := f24Dout(163 downto 140);    -- bth.psn
@@ -2779,108 +2894,117 @@ begin
             end if;
          end if;
          respPktHdrV := respPsnV & msnV & isFirstOrOnlyRespV & f24Dout(0);
-         f25Din <= f24Dout(1155 downto 2) & respPktHdrV;
-      end if;
-      -- Stage 24 : waitAtomicResp (f25 -> f26) + atomicSrv.response.get (BSV @2780)
-      --   f25/f26 (1204, tuple6): respPktGenInfo[122:50] (expectAtomicRespOrig[117],
-      --     atomicAckOrig Maybe#Long[115:51]).  AtomicOpResp: original[111:48].
-      --   response.get is CONDITIONAL on expectAtomicRespOrig; atomicAckOrig := Valid original
-      --   (else Invalid).  f26 = f25 with respPktGenInfo.atomicAckOrig patched.
-      doAtomicRespV := (f25Dout(117) = '1');
-      if (workerEnable and f25Valid = '1' and f26NotFull = '1'
-          and (not doAtomicRespV or atomicRespValid = '1')) then
-         f25RdEn <= '1'; f26WrEn <= '1';
-         if (doAtomicRespV) then
-            atomicRespRdEn <= '1';
-            atomicAckOrigV := '1' & atomicRespData(111 downto 48);   -- tagged Valid original
+         if EN_READ_G then
+            f25WrEn <= '1';
+            f25Din <= f24Dout(1155 downto 2) & respPktHdrV;
          else
-            atomicAckOrigV := (others => '0');                       -- tagged Invalid
+            -- ACK/NAK, status, permission, PSN and MSN remain on the shared path.
+            f30WrEn <= '1';
+            f30Din <= f24Dout(1155 downto 2) & respPktHdrV;
          end if;
-         f26Din <= f25Dout(1203 downto 116) & atomicAckOrigV & f25Dout(50 downto 0);
       end if;
-      -- Stage 25 : insertIntoAtomicCache (f26 -> f27) + dupReadAtomicCache.insertAtomic (BSV @2834)
-      --   atomicEth = pmd[530:307] (pmd-rel: va[530:467] rkey[466:435] swap[434:371] comp[370:307]);
-      --   in f26 pmd base 555 -> atomicEth = f26[1085:862].
-      --   reqPktInfo base 123 (bth = reqPktInfo[160:65]): bth.psn[211:188] bth.opcode[280:276].
-      --   atomicAckOrig[115:51] (value[114:51]).
-      --   insertAtomic is CONDITIONAL on expectAtomicRespOrig (f26[117]).
-      --   AtomicCacheItem(317): atomicPSN[316:293] atomicOpCode[292:288] atomicEth[287:64] atomicAckEth[63:0].
-      --   f27 (1428, tuple7) = f26 & atomicEth[223:0].
-      atomicEthV      := f26Dout(1085 downto 862);
-      doInsertAtomicV := (f26Dout(117) = '1');
-      atomicCacheItemV := f26Dout(211 downto 188) & f26Dout(280 downto 276)
-                          & atomicEthV & f26Dout(114 downto 51);
-      if (workerEnable and f26Valid = '1' and f27NotFull = '1'
-          and (not doInsertAtomicV or insertAtomicReady = '1')) then
-         f26RdEn <= '1'; f27WrEn <= '1';
-         if (doInsertAtomicV) then
-            insertAtomicValid <= '1';
-            insertAtomicData  <= atomicCacheItemV;
-         end if;
-         f27Din <= f26Dout & atomicEthV;
-      end if;
-      -- Stage 26 : checkReadResp (f27 -> f28) + payloadGen.response.get; sets hasDmaReadRespErr (Block C) (BSV @2903)
-      --   f27/f28 (1428, tuple7): respPktGenInfo base 274 -> hasDmaReadRespErr[345]
-      --     hasErrRespGen[344] shouldGenResp[343] expectReadRespPayload[342].
-      --   PayloadGenResp(2): addPadding[1] isRespErr[0].
-      --   response.get CONDITIONAL on (!hasDmaReadRespErrReg & expectReadRespPayload); on isRespErr:
-      --     latch sticky v.hasDmaReadRespErr, clear expectReadRespPayload.
-      doPayloadRespV := (r.hasDmaReadRespErr = '0') and (f27Dout(342) = '1');
-      if (workerEnable and f27Valid = '1' and f28NotFull = '1'
-          and (not doPayloadRespV or payloadGenRespValid = '1')) then
-         f27RdEn <= '1'; f28WrEn <= '1';
-         hasDmaRdErrV := f27Dout(345);   -- incoming respPktGenInfo.hasDmaReadRespErr
-         expectReadV  := f27Dout(342);
-         if (doPayloadRespV) then
-            payloadGenRespGetEn <= '1';
-            if (payloadGenRespData(0) = '1') then   -- isRespErr
-               hasDmaRdErrV       := '1';
-               v.hasDmaReadRespErr := '1';          -- sticky Block-C flag
-               expectReadV        := '0';
-            end if;
-         end if;
-         f28Din <= f27Dout(1427 downto 346) & hasDmaRdErrV & f27Dout(344 downto 343)
-                   & expectReadV & f27Dout(341 downto 0);
-      end if;
-      -- Stage 27 : queryPerm4DupAtomicReq (f28 -> f29) + searchAtomicReq (BSV @3003)
-      -- On DUP atomic w/o error, issue dupReadAtomicCache.searchAtomicReq; set
-      -- respPktGenInfo.expectDupAtomicCheckResp. searchAtomicReq is CONDITIONAL
-      -- (gate its ready only when performed); atomicEth field (f28[223:0]) is dropped.
-      doSearchAtomicV := (f28Dout(778 downto 775) = ST_DUP_C) and (f28Dout(357) = '1')
-                         and (f28Dout(346) = '0') and (f28Dout(345) = '0');  -- DUP & isAtomic & !reqErr & !dmaErr
-      if (workerEnable and f28Valid = '1' and f29NotFull = '1'
-          and (not doSearchAtomicV or searchAtomicReqReady = '1')) then
-         f28RdEn <= '1'; f29WrEn <= '1';
-         if (doSearchAtomicV) then
-            searchAtomicReqValid <= '1';
-            -- AtomicCacheItem(317): atomicPSN bth.psn | atomicOpCode bth.opcode | atomicEth | atomicAckEth(dontCare)
-            searchAtomicReqData <= f28Dout(435 downto 412) & f28Dout(504 downto 500)
-                                   & f28Dout(223 downto 0) & slv(to_unsigned(0, 64));
-         end if;
-         -- f29 = f28 minus atomicEth, with expectDupAtomicCheckResp (respPktGenInfo[66]=f28[340]) updated
-         f29Din <= f28Dout(1427 downto 341) & toSl(doSearchAtomicV) & f28Dout(339 downto 224);
-      end if;
-      -- Stage 28 : checkPerm4DupAtomicReq (f29 -> f30) + searchAtomicResp (BSV @3042)
-      -- If a dup-atomic search was issued, get its result: Valid -> patch
-      -- atomicAckOrig + shouldGenResp(qpNeedGenResp); Invalid -> reqStatus DISCARD.
-      -- searchAtomicResp.get is CONDITIONAL (gate its valid only when expected).
-      reqStatus28V := f29Dout(554 downto 551);
-      shouldGen28V := f29Dout(119);            -- respPktGenInfo.shouldGenResp
-      atomicAck28V := f29Dout(115 downto 51);  -- respPktGenInfo.atomicAckOrig (Maybe#Long)
-      if (workerEnable and f29Valid = '1' and f30NotFull = '1'
-          and (f29Dout(116) = '0' or searchAtomicRespValid = '1')) then   -- expectDupAtomicCheckResp
-         f29RdEn <= '1'; f30WrEn <= '1';
-         if (f29Dout(116) = '1') then
-            searchAtomicRespGetEn <= '1';
-            if (searchAtomicRespData(317) = '1') then           -- Valid atomicCache
-               atomicAck28V := '1' & searchAtomicRespData(63 downto 0);  -- Valid atomicAckEth.orig
-               shouldGen28V := toSl(qpNeedGenResp(f29Dout(283 downto 281)));  -- bth.trans
+      if EN_READ_G then
+         -- Stage 24 : waitAtomicResp (f25 -> f26) + atomicSrv.response.get (BSV @2780)
+         --   f25/f26 (1204, tuple6): respPktGenInfo[122:50] (expectAtomicRespOrig[117],
+         --     atomicAckOrig Maybe#Long[115:51]).  AtomicOpResp: original[111:48].
+         --   response.get is CONDITIONAL on expectAtomicRespOrig; atomicAckOrig := Valid original
+         --   (else Invalid).  f26 = f25 with respPktGenInfo.atomicAckOrig patched.
+         doAtomicRespV := (f25Dout(117) = '1');
+         if (workerEnable and f25Valid = '1' and f26NotFull = '1'
+             and (not doAtomicRespV or atomicRespValid = '1')) then
+            f25RdEn <= '1'; f26WrEn <= '1';
+            if (doAtomicRespV) then
+               atomicRespRdEn <= '1';
+               atomicAckOrigV := '1' & atomicRespData(111 downto 48);   -- tagged Valid original
             else
-               reqStatus28V := ST_DISCARD_C;
+               atomicAckOrigV := (others => '0');                       -- tagged Invalid
             end if;
+            f26Din <= f25Dout(1203 downto 116) & atomicAckOrigV & f25Dout(50 downto 0);
          end if;
-         f30Din <= f29Dout(1203 downto 555) & reqStatus28V & f29Dout(550 downto 120)
-                   & shouldGen28V & f29Dout(118 downto 116) & atomicAck28V & f29Dout(50 downto 0);
+         -- Stage 25 : insertIntoAtomicCache (f26 -> f27) + dupReadAtomicCache.insertAtomic (BSV @2834)
+         --   atomicEth = pmd[530:307] (pmd-rel: va[530:467] rkey[466:435] swap[434:371] comp[370:307]);
+         --   in f26 pmd base 555 -> atomicEth = f26[1085:862].
+         --   reqPktInfo base 123 (bth = reqPktInfo[160:65]): bth.psn[211:188] bth.opcode[280:276].
+         --   atomicAckOrig[115:51] (value[114:51]).
+         --   insertAtomic is CONDITIONAL on expectAtomicRespOrig (f26[117]).
+         --   AtomicCacheItem(317): atomicPSN[316:293] atomicOpCode[292:288] atomicEth[287:64] atomicAckEth[63:0].
+         --   f27 (1428, tuple7) = f26 & atomicEth[223:0].
+         atomicEthV      := f26Dout(1085 downto 862);
+         doInsertAtomicV := (f26Dout(117) = '1');
+         atomicCacheItemV := f26Dout(211 downto 188) & f26Dout(280 downto 276)
+                             & atomicEthV & f26Dout(114 downto 51);
+         if (workerEnable and f26Valid = '1' and f27NotFull = '1'
+             and (not doInsertAtomicV or insertAtomicReady = '1')) then
+            f26RdEn <= '1'; f27WrEn <= '1';
+            if (doInsertAtomicV) then
+               insertAtomicValid <= '1';
+               insertAtomicData  <= atomicCacheItemV;
+            end if;
+            f27Din <= f26Dout & atomicEthV;
+         end if;
+         -- Stage 26 : checkReadResp (f27 -> f28) + payloadGen.response.get; sets hasDmaReadRespErr (Block C) (BSV @2903)
+         --   f27/f28 (1428, tuple7): respPktGenInfo base 274 -> hasDmaReadRespErr[345]
+         --     hasErrRespGen[344] shouldGenResp[343] expectReadRespPayload[342].
+         --   PayloadGenResp(2): addPadding[1] isRespErr[0].
+         --   response.get CONDITIONAL on (!hasDmaReadRespErrReg & expectReadRespPayload); on isRespErr:
+         --     latch sticky v.hasDmaReadRespErr, clear expectReadRespPayload.
+         doPayloadRespV := (r.hasDmaReadRespErr = '0') and (f27Dout(342) = '1');
+         if (workerEnable and f27Valid = '1' and f28NotFull = '1'
+             and (not doPayloadRespV or payloadGenRespValid = '1')) then
+            f27RdEn <= '1'; f28WrEn <= '1';
+            hasDmaRdErrV := f27Dout(345);   -- incoming respPktGenInfo.hasDmaReadRespErr
+            expectReadV  := f27Dout(342);
+            if (doPayloadRespV) then
+               payloadGenRespGetEn <= '1';
+               if (payloadGenRespData(0) = '1') then   -- isRespErr
+                  hasDmaRdErrV       := '1';
+                  v.hasDmaReadRespErr := '1';          -- sticky Block-C flag
+                  expectReadV        := '0';
+               end if;
+            end if;
+            f28Din <= f27Dout(1427 downto 346) & hasDmaRdErrV & f27Dout(344 downto 343)
+                      & expectReadV & f27Dout(341 downto 0);
+         end if;
+         -- Stage 27 : queryPerm4DupAtomicReq (f28 -> f29) + searchAtomicReq (BSV @3003)
+         -- On DUP atomic w/o error, issue dupReadAtomicCache.searchAtomicReq; set
+         -- respPktGenInfo.expectDupAtomicCheckResp. searchAtomicReq is CONDITIONAL
+         -- (gate its ready only when performed); atomicEth field (f28[223:0]) is dropped.
+         doSearchAtomicV := (f28Dout(778 downto 775) = ST_DUP_C) and (f28Dout(357) = '1')
+                            and (f28Dout(346) = '0') and (f28Dout(345) = '0');  -- DUP & isAtomic & !reqErr & !dmaErr
+         if (workerEnable and f28Valid = '1' and f29NotFull = '1'
+             and (not doSearchAtomicV or searchAtomicReqReady = '1')) then
+            f28RdEn <= '1'; f29WrEn <= '1';
+            if (doSearchAtomicV) then
+               searchAtomicReqValid <= '1';
+               -- AtomicCacheItem(317): atomicPSN bth.psn | atomicOpCode bth.opcode | atomicEth | atomicAckEth(dontCare)
+               searchAtomicReqData <= f28Dout(435 downto 412) & f28Dout(504 downto 500)
+                                      & f28Dout(223 downto 0) & slv(to_unsigned(0, 64));
+            end if;
+            -- f29 = f28 minus atomicEth, with expectDupAtomicCheckResp (respPktGenInfo[66]=f28[340]) updated
+            f29Din <= f28Dout(1427 downto 341) & toSl(doSearchAtomicV) & f28Dout(339 downto 224);
+         end if;
+         -- Stage 28 : checkPerm4DupAtomicReq (f29 -> f30) + searchAtomicResp (BSV @3042)
+         -- If a dup-atomic search was issued, get its result: Valid -> patch
+         -- atomicAckOrig + shouldGenResp(qpNeedGenResp); Invalid -> reqStatus DISCARD.
+         -- searchAtomicResp.get is CONDITIONAL (gate its valid only when expected).
+         reqStatus28V := f29Dout(554 downto 551);
+         shouldGen28V := f29Dout(119);            -- respPktGenInfo.shouldGenResp
+         atomicAck28V := f29Dout(115 downto 51);  -- respPktGenInfo.atomicAckOrig (Maybe#Long)
+         if (workerEnable and f29Valid = '1' and f30NotFull = '1'
+             and (f29Dout(116) = '0' or searchAtomicRespValid = '1')) then   -- expectDupAtomicCheckResp
+            f29RdEn <= '1'; f30WrEn <= '1';
+            if (f29Dout(116) = '1') then
+               searchAtomicRespGetEn <= '1';
+               if (searchAtomicRespData(317) = '1') then           -- Valid atomicCache
+                  atomicAck28V := '1' & searchAtomicRespData(63 downto 0);  -- Valid atomicAckEth.orig
+                  shouldGen28V := toSl(qpNeedGenResp(f29Dout(283 downto 281)));  -- bth.trans
+               else
+                  reqStatus28V := ST_DISCARD_C;
+               end if;
+            end if;
+            f30Din <= f29Dout(1203 downto 555) & reqStatus28V & f29Dout(550 downto 120)
+                      & shouldGen28V & f29Dout(118 downto 116) & atomicAck28V & f29Dout(50 downto 0);
+         end if;
       end if;
       -- Stage 29 : genRespHeader (f30 -> f31) + sets hasErrRespGen (Block C) (BSV @3097)
       -- Build the response HeaderRDMA (first/only vs middle/last), promote
@@ -2950,7 +3074,7 @@ begin
       -- (a) pendingDestReadAtomicReqCnt.decrOne when this WC closes a read/atomic req
       --     (BSV: reqStatus==NORMAL && !hasErrRespGen && ((isReadReq &&
       --      isFirstOrOnlyRespPkt) || isAtomicReq) && cnt > 0).
-      doDecr31V := (reqStatus31V = ST_NORMAL_C) and (f32Dout(120) = '0')
+      doDecr31V := EN_READ_G and (reqStatus31V = ST_NORMAL_C) and (f32Dout(120) = '0')
                    and (((f32Dout(134) = '1') and (f32Dout(1) = '1'))   -- isReadReq & isFirstOrOnlyResp
                         or (f32Dout(133) = '1'))                          -- isAtomicReq
                    and (unsigned(ccCnt) > 0);
