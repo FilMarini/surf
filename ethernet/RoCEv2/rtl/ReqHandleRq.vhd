@@ -1006,6 +1006,95 @@ architecture rtl of ReqHandleRq is
    constant RHW_C : integer := 593;   -- respHeaderOutQ
    constant PSW_C : integer := 24;    -- psnRespOutQ
 
+   -- Response stages no longer need the full packet header. Select the WC
+   -- extension before storing it, rather than carrying four possible 32-bit
+   -- locations to stage 31. Opcode/transport are immutable fields of reqPktInfo,
+   -- including on invalid, duplicate, retry and flush tokens.
+   -- Stages 21..26 retain the AtomicEth window when READ/atomic is enabled;
+   -- this window also contains all four possible completion extension words.
+   -- stage 25 copies it into the separate cache-query field used by 27..28.
+   function responseHeaderWidth (keepAtomic : boolean) return positive is
+   begin
+      if keepAtomic then return 224; end if;  -- AtomicEth contains all extension locations
+      return 32;
+   end function;
+
+   function wcExtensionLow (data : slv; pmdLow : natural) return natural is
+      constant INFO_LOW_C : natural := pmdLow - 432;
+      variable bitLow     : natural := 384;  -- SEND/WRITE_LAST IMM or SEND invalidate
+   begin
+      if data(INFO_LOW_C+157 downto INFO_LOW_C+153) = "01011" then
+         bitLow := 256;  -- WRITE_ONLY IMM follows RETH
+      end if;
+      if data(INFO_LOW_C+160 downto INFO_LOW_C+158) = "101" then
+         bitLow := bitLow - 32;  -- XRC extension
+      end if;
+      return pmdLow + 115 + bitLow;
+   end function;
+
+   function packResponse (data : slv; pmdLow : natural;
+                          keepAtomic : boolean) return slv is
+      constant HEADER_LOW_C : natural := pmdLow + 115;
+      constant COMPACT_W_C  : positive := responseHeaderWidth(keepAtomic);
+      variable header       : slv(COMPACT_W_C-1 downto 0);
+      variable extLow       : natural := wcExtensionLow(data, pmdLow);
+   begin
+      if keepAtomic then
+         header(223 downto 0) := data(pmdLow+530 downto pmdLow+307);
+      else
+         header(COMPACT_W_C-1 downto COMPACT_W_C-32) := data(extLow+31 downto extLow);
+      end if;
+      return data(data'high downto HEADER_LOW_C+512) & header
+             & data(HEADER_LOW_C-1 downto 0);
+   end function;
+
+   -- A logical stage view keeps the existing tuple offsets local to workers.
+   -- Only live header fields are defined: the selected WC word and (where
+   -- needed) AtomicEth. Zero-filled dead bits have no consumer;
+   -- this is not a reconstruction of an externally visible HeaderRDMA.
+   function unpackResponse (data : slv; pmdLow : natural;
+                            keepAtomic : boolean) return slv is
+      constant HEADER_LOW_C : natural := pmdLow + 115;
+      constant COMPACT_W_C  : positive := responseHeaderWidth(keepAtomic);
+      variable result       : slv(data'length+512-COMPACT_W_C-1 downto 0) := (others => '0');
+      variable extLow       : natural;
+   begin
+      result(result'high downto HEADER_LOW_C+512) := data(data'high downto HEADER_LOW_C+COMPACT_W_C);
+      result(HEADER_LOW_C-1 downto 0) := data(HEADER_LOW_C-1 downto 0);
+      if keepAtomic then
+         result(pmdLow+530 downto pmdLow+307) := data(HEADER_LOW_C+223 downto HEADER_LOW_C);
+      else
+         extLow := wcExtensionLow(result, pmdLow);
+         result(extLow+31 downto extLow) := data(HEADER_LOW_C+COMPACT_W_C-1 downto HEADER_LOW_C+COMPACT_W_C-32);
+      end if;
+      return result;
+   end function;
+
+   constant C21_C : positive := W21_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f21PackedDin,                         f21PackedDout : slv(C21_C-1 downto 0);
+   constant C22_C : positive := W22_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f22PackedDin,                         f22PackedDout : slv(C22_C-1 downto 0);
+   constant C23_C : positive := W23_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f23PackedDin,                         f23PackedDout : slv(C23_C-1 downto 0);
+   constant C24_C : positive := W24_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f24PackedDin,                         f24PackedDout : slv(C24_C-1 downto 0);
+   constant C25_C : positive := W25_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f25PackedDin,                         f25PackedDout : slv(C25_C-1 downto 0);
+   constant C26_C : positive := W26_C - 512 + responseHeaderWidth(EN_READ_G);
+   signal f26PackedDin,                         f26PackedDout : slv(C26_C-1 downto 0);
+   constant C27_C : positive := W27_C - 512 + responseHeaderWidth(false);
+   signal f27PackedDin,                         f27PackedDout : slv(C27_C-1 downto 0);
+   constant C28_C : positive := W28_C - 512 + responseHeaderWidth(false);
+   signal f28PackedDin,                         f28PackedDout : slv(C28_C-1 downto 0);
+   constant C29_C : positive := W29_C - 512 + responseHeaderWidth(false);
+   signal f29PackedDin,                         f29PackedDout : slv(C29_C-1 downto 0);
+   constant C30_C : positive := W30_C - 512 + responseHeaderWidth(false);
+   signal f30PackedDin,                         f30PackedDout : slv(C30_C-1 downto 0);
+   constant C31_C : positive := W31_C - 512 + responseHeaderWidth(false);
+   signal f31PackedDin,                         f31PackedDout : slv(C31_C-1 downto 0);
+   constant C32_C : positive := W32_C - 512 + responseHeaderWidth(false);
+   signal f32PackedDin,                         f32PackedDout : slv(C32_C-1 downto 0);
+
    -- per-FIFO handshake bundles
    signal f01WrEn : sl;
    signal f01RdEn : sl;
@@ -1173,6 +1262,30 @@ architecture rtl of ReqHandleRq is
 begin
 
    fifoClr <= rst or isReset;
+   f21PackedDin <= packResponse(f21Din, 505, EN_READ_G);
+   f21Dout <= unpackResponse(f21PackedDout, 505, EN_READ_G);
+   f22PackedDin <= packResponse(f22Din, 505, EN_READ_G);
+   f22Dout <= unpackResponse(f22PackedDout, 505, EN_READ_G);
+   f23PackedDin <= packResponse(f23Din, 505, EN_READ_G);
+   f23Dout <= unpackResponse(f23PackedDout, 505, EN_READ_G);
+   f24PackedDin <= packResponse(f24Din, 507, EN_READ_G);
+   f24Dout <= unpackResponse(f24PackedDout, 507, EN_READ_G);
+   f25PackedDin <= packResponse(f25Din, 555, EN_READ_G);
+   f25Dout <= unpackResponse(f25PackedDout, 555, EN_READ_G);
+   f26PackedDin <= packResponse(f26Din, 555, EN_READ_G);
+   f26Dout <= unpackResponse(f26PackedDout, 555, EN_READ_G);
+   f27PackedDin <= packResponse(f27Din, 779, false);
+   f27Dout <= unpackResponse(f27PackedDout, 779, false);
+   f28PackedDin <= packResponse(f28Din, 779, false);
+   f28Dout <= unpackResponse(f28PackedDout, 779, false);
+   f29PackedDin <= packResponse(f29Din, 555, false);
+   f29Dout <= unpackResponse(f29PackedDout, 555, false);
+   f30PackedDin <= packResponse(f30Din, 555, false);
+   f30Dout <= unpackResponse(f30PackedDout, 555, false);
+   f31PackedDin <= packResponse(f31Din, 1149, false);
+   f31Dout <= unpackResponse(f31PackedDout, 1149, false);
+   f32PackedDin <= packResponse(f32Din, 555, false);
+   f32Dout <= unpackResponse(f32PackedDout, 555, false);
 
    -- Combinational Mealy method: respHeaderOutNotEmpty() = psnRespOutQ.notEmpty
    respHeaderOutNotEmpty <= psnOutValid;
@@ -1531,220 +1644,220 @@ begin
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W21_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C21_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f21WrEn,
-         din => f21Din,
+         din => f21PackedDin,
          not_full => f21NotFull,
          rd_clk => clk,
          rd_en => f21RdEn,
-         dout => f21Dout,
+         dout => f21PackedDout,
          valid => f21Valid);
    U_RespGenCheck4OtherCasesQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W22_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C22_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f22WrEn,
-         din => f22Din,
+         din => f22PackedDin,
          not_full => f22NotFull,
          rd_clk => clk,
          rd_en => f22RdEn,
-         dout => f22Dout,
+         dout => f22PackedDout,
          valid => f22Valid);
    U_RespCountQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W23_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C23_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f23WrEn,
-         din => f23Din,
+         din => f23PackedDin,
          not_full => f23NotFull,
          rd_clk => clk,
          rd_en => f23RdEn,
-         dout => f23Dout,
+         dout => f23PackedDout,
          valid => f23Valid);
    U_RespPsnAndMsnQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W24_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C24_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f24WrEn,
-         din => f24Din,
+         din => f24PackedDin,
          not_full => f24NotFull,
          rd_clk => clk,
          rd_en => f24RdEn,
-         dout => f24Dout,
+         dout => f24PackedDout,
          valid => f24Valid);
    GEN_WAITATOMICRESP : if EN_READ_G generate
       U_WaitAtomicRespQ : entity surf.Fifo
          generic map (
             TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
             GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-            DATA_WIDTH_G => W25_C, ADDR_WIDTH_G => 4)
+            DATA_WIDTH_G => C25_C, ADDR_WIDTH_G => 4)
          port map (
             rst => fifoClr,
             wr_clk => clk,
             wr_en => f25WrEn,
-            din => f25Din,
+            din => f25PackedDin,
             not_full => f25NotFull,
             rd_clk => clk,
             rd_en => f25RdEn,
-            dout => f25Dout,
+            dout => f25PackedDout,
             valid => f25Valid);
    end generate;
    GEN_NO_WAITATOMICRESP : if not EN_READ_G generate
       -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
       f25NotFull <= '0';
       f25Valid   <= '0';
-      f25Dout    <= (others => '0');
+      f25PackedDout <= (others => '0');
    end generate;
    GEN_ATOMICCACHEINSERT : if EN_READ_G generate
       U_AtomicCacheInsertQ : entity surf.Fifo
          generic map (
             TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
             GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-            DATA_WIDTH_G => W26_C, ADDR_WIDTH_G => 4)
+            DATA_WIDTH_G => C26_C, ADDR_WIDTH_G => 4)
          port map (
             rst => fifoClr,
             wr_clk => clk,
             wr_en => f26WrEn,
-            din => f26Din,
+            din => f26PackedDin,
             not_full => f26NotFull,
             rd_clk => clk,
             rd_en => f26RdEn,
-            dout => f26Dout,
+            dout => f26PackedDout,
             valid => f26Valid);
    end generate;
    GEN_NO_ATOMICCACHEINSERT : if not EN_READ_G generate
       -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
       f26NotFull <= '0';
       f26Valid   <= '0';
-      f26Dout    <= (others => '0');
+      f26PackedDout <= (others => '0');
    end generate;
    GEN_READ_RESP_CHECK : if EN_READ_G generate
       U_RespCheckQ : entity surf.Fifo
          generic map (
             TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
             GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-            DATA_WIDTH_G => W27_C, ADDR_WIDTH_G => 4)
+            DATA_WIDTH_G => C27_C, ADDR_WIDTH_G => 4)
          port map (
             rst => fifoClr,
             wr_clk => clk,
             wr_en => f27WrEn,
-            din => f27Din,
+            din => f27PackedDin,
             not_full => f27NotFull,
             rd_clk => clk,
             rd_en => f27RdEn,
-            dout => f27Dout,
+            dout => f27PackedDout,
             valid => f27Valid);
    end generate;
    GEN_NO_READ_RESP_CHECK : if not EN_READ_G generate
       f27NotFull <= '0';
       f27Valid   <= '0';
-      f27Dout    <= (others => '0');
+      f27PackedDout <= (others => '0');
    end generate;
    GEN_DUPATOMICREQPERMQUERY : if EN_READ_G generate
       U_DupAtomicReqPermQueryQ : entity surf.Fifo
          generic map (
             TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
             GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-            DATA_WIDTH_G => W28_C, ADDR_WIDTH_G => 4)
+            DATA_WIDTH_G => C28_C, ADDR_WIDTH_G => 4)
          port map (
             rst => fifoClr,
             wr_clk => clk,
             wr_en => f28WrEn,
-            din => f28Din,
+            din => f28PackedDin,
             not_full => f28NotFull,
             rd_clk => clk,
             rd_en => f28RdEn,
-            dout => f28Dout,
+            dout => f28PackedDout,
             valid => f28Valid);
    end generate;
    GEN_NO_DUPATOMICREQPERMQUERY : if not EN_READ_G generate
       -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
       f28NotFull <= '0';
       f28Valid   <= '0';
-      f28Dout    <= (others => '0');
+      f28PackedDout <= (others => '0');
    end generate;
    GEN_DUPATOMICREQPERMCHECK : if EN_READ_G generate
       U_DupAtomicReqPermCheckQ : entity surf.Fifo
          generic map (
             TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
             GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-            DATA_WIDTH_G => W29_C, ADDR_WIDTH_G => 4)
+            DATA_WIDTH_G => C29_C, ADDR_WIDTH_G => 4)
          port map (
             rst => fifoClr,
             wr_clk => clk,
             wr_en => f29WrEn,
-            din => f29Din,
+            din => f29PackedDin,
             not_full => f29NotFull,
             rd_clk => clk,
             rd_en => f29RdEn,
-            dout => f29Dout,
+            dout => f29PackedDout,
             valid => f29Valid);
    end generate;
    GEN_NO_DUPATOMICREQPERMCHECK : if not EN_READ_G generate
       -- Absent queue: never advertises storage or data. Shared traffic bypasses it.
       f29NotFull <= '0';
       f29Valid   <= '0';
-      f29Dout    <= (others => '0');
+      f29PackedDout <= (others => '0');
    end generate;
    U_RespHeaderGenQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W30_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C30_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f30WrEn,
-         din => f30Din,
+         din => f30PackedDin,
          not_full => f30NotFull,
          rd_clk => clk,
          rd_en => f30RdEn,
-         dout => f30Dout,
+         dout => f30PackedDout,
          valid => f30Valid);
    U_PendingRespQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W31_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C31_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f31WrEn,
-         din => f31Din,
+         din => f31PackedDin,
          not_full => f31NotFull,
          rd_clk => clk,
          rd_en => f31RdEn,
-         dout => f31Dout,
+         dout => f31PackedDout,
          valid => f31Valid);
    U_WorkCompReqQ : entity surf.Fifo
       generic map (
          TPD_G => TPD_G, RST_POLARITY_G => '1', RST_ASYNC_G => false,
          GEN_SYNC_FIFO_G => true, FWFT_EN_G => true, MEMORY_TYPE_G => "distributed",
-         DATA_WIDTH_G => W32_C, ADDR_WIDTH_G => 4)
+         DATA_WIDTH_G => C32_C, ADDR_WIDTH_G => 4)
       port map (
          rst => fifoClr,
          wr_clk => clk,
          wr_en => f32WrEn,
-         din => f32Din,
+         din => f32PackedDin,
          not_full => f32NotFull,
          rd_clk => clk,
          rd_en => f32RdEn,
-         dout => f32Dout,
+         dout => f32PackedDout,
          valid => f32Valid);
    -- output FIFOs
    U_WorkCompGenReqOutQ : entity surf.Fifo
@@ -3078,19 +3191,11 @@ begin
                    and (((f32Dout(134) = '1') and (f32Dout(1) = '1'))   -- isReadReq & isFirstOrOnlyResp
                         or (f32Dout(133) = '1'))                          -- isAtomicReq
                    and (unsigned(ccCnt) > 0);
-      -- (b) extractImmDt/extractIETH (Utils.bsv:942,971) — 32b slices of headerData.
-      if (reqOp31V = "01011") then                 -- RDMA_WRITE_ONLY_WITH_IMMEDIATE
-         if (trans31V = "101") then immDt31V := f32Dout(925 downto 894);   -- XRC: hdr[255:224]
-         else                       immDt31V := f32Dout(957 downto 926);   -- hdr[287:256] (after RETH)
-         end if;
-      else
-         if (trans31V = "101") then immDt31V := f32Dout(1053 downto 1022); -- XRC: hdr[383:352]
-         else                       immDt31V := f32Dout(1085 downto 1054); -- hdr[415:384] (after BTH)
-         end if;
-      end if;
-      if (trans31V = "101") then ieth31V := f32Dout(1053 downto 1022);     -- XRC: hdr[383:352]
-      else                       ieth31V := f32Dout(1085 downto 1054);     -- hdr[415:384]
-      end if;
+      -- (b) The IMM and invalidate opcodes are disjoint: one selected word
+      -- suffices even for error completions. The selector is shared with the
+      -- response FIFO codec (including WRITE_ONLY and XRC offsets).
+      immDt31V := f32Dout(wcExtensionLow(f32Dout, 555)+31 downto wcExtensionLow(f32Dout, 555));
+      ieth31V := immDt31V;
       -- (c) Maybe#IMM / Maybe#RKEY : tag[32] & data[31:0]
       if (opHasImmDt(reqOp31V)) then immM31V := '1' & immDt31V; else immM31V := (32 downto 0 => '0'); end if;
       if (opHasIETH(reqOp31V))  then rkeyM31V := '1' & ieth31V; else rkeyM31V := (32 downto 0 => '0'); end if;
